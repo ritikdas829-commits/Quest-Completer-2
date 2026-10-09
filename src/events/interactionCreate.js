@@ -1,5 +1,5 @@
 import { getEmoji } from '../handlers/emoji.js';
-import { handleLinkModal, handleLinkPromptButton } from '../commands/Link.js';
+import { handleLinkModal, handleLinkPromptButton } from '../commands/linkCommands.js';
 import { handleGuideButtons } from '../commands/guide.js';
 
 export default {
