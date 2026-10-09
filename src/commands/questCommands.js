@@ -1,195 +1,227 @@
+
 import {
     SlashCommandBuilder,
     ContainerBuilder,
     TextDisplayBuilder,
-    ActionRowBuilder,
-    StringSelectMenuBuilder,
+    MediaGalleryBuilder,
+    MediaGalleryItemBuilder,
     ButtonBuilder,
     ButtonStyle,
-    MessageFlags,
+    SeparatorBuilder,
+    SeparatorSpacingSize,
+    MessageFlags
 } from 'discord.js';
 import { QuestClient } from '../quest/questClient.js';
 import { buildLinkPrompt } from './linkCommands.js';
 
-function buildQuestSolverCard(quest, allValidQuests = [], logStatus = '🧭 Quest selected\n📝 Enrolled', progress = 0) {
-    const c = new ContainerBuilder().setAccentColor(0x5865F2);
+function fmtDate(d) {
+    if (!d) return '10/12/2026';
+    try { return new Date(d).toLocaleDateString('en-US'); } catch { return '10/12/2026'; }
+}
+
+// EXACT Orbie style card from your screenshot
+function buildExactOrbieCard(quest, logStatus = '🧭 Quest selected\n📝 Enrolled', opts = {}) {
+    const q = quest.config || quest;
+    const app = q.application || {};
+    const taskConf = q.task_config || q.taskConfig || {};
+    const firstTask = Object.values(taskConf?.tasks || {})[0] || {};
     
-    const gameTitle = quest?.config?.messages?.game_title || 'AION 2';
-    const publisher = quest?.config?.messages?.publisher || 'NC';
-    const questName = quest?.config?.messages?.quest_name || 'AION 2 LAUNCH PLAY';
-    const rewardName = quest?.config?.reward_store_listing?.name || '700 Orbs 💠';
+    const game = opts.game || q.messages?.gameTitle || app.name || 'AION 2';
+    const publisher = opts.publisher || q.messages?.publisherName || app.publisher || 'NC';
+    const questName = opts.questName || q.messages?.questName || q.id || 'AION 2 LAUNCH PLAY';
+    const enrolled = fmtDate(opts.enrolledAt || new Date());
+    const expires = fmtDate(opts.expiresAt || q.expires_at || '10/12/2026');
+    const progress = opts.progress ?? 0;
+    const desktop = opts.desktop ?? 0;
+    const status = opts.status || 'idle';
+    
+    const rewardCount = q.rewards?.[0]?.count || 700;
+    const minutes = Math.round((firstTask.target || 900)/60);
+    const banner = opts.bannerUrl || q.assets?.hero || 'https://i.imgur.com/YourAionBanner.jpg';
 
-    let contentText = `# 🌐 Quest Solver\n\n` +
-        `- **Game:** ${gameTitle}\n` +
-        `- **Publisher:** ${publisher}\n` +
-        `- **Quest Name:** ${questName}\n` +
-        `- **Enrolled At:** 10/09/2026\n` +
-        `- **Expires At:** 10/12/2026\n` +
-        `- **Progress:**\n⏳ ${progress}\%\n💻 Desktop: ${progress}%\n\n` +
-        `### Rewards:\n- ${rewardName}\n\n` +
-        `### Tasks:\n- Play On Desktop for 15m`;
+    // Main Container - Orbie exact
+    const main = new ContainerBuilder().setAccentColor(0x2B2D31);
 
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(contentText));
+    main.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+            `## <:orb_wreath:1390000000000000000> Quest Solver\n\n` +
+            `• **Game:** ${game}\n` +
+            `• **Publisher:** ${publisher}\n` +
+            `• **Quest Name:** ${questName}\n` +
+            `• **Enrolled At:** ${enrolled}\n` +
+            `• **Expires At:** ${expires}\n` +
+            `• **Progress:**\n` +
+            `⚙️ ${progress}%\n` +
+            `💻 Desktop: ${desktop}%\n\n` +
+            `## Rewards:\n` +
+            `• ${rewardCount} Orbs <a:orbs:1390000000000000001>\n\n` +
+            `## Tasks:\n` +
+            `• Play On Desktop for ${minutes}m`
+        )
+    );
 
-    if (Array.isArray(allValidQuests) && allValidQuests.length > 0 && quest) {
-        const selectMenu = new StringSelectMenuBuilder()
-            .setCustomId('quest_select_menu')
-            .setPlaceholder('Choose another quest...')
-            .addOptions(
-                allValidQuests.slice(0, 25).map(q => ({
-                    label: (q.config?.messages?.quest_name || 'Quest').substring(0, 100),
-                    value: q.id,
-                    description: `Game: ${q.config?.messages?.game_title || 'AION 2'}`.substring(0, 100),
-                    default: q.id === quest.id
-                }))
+    main.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Large).setDivider(true));
+
+    // AION 2 Banner - exact like screenshot
+    if (banner && banner.startsWith('http')) {
+        try {
+            main.addMediaGalleryComponents(
+                new MediaGalleryBuilder().addItems(
+                    new MediaGalleryItemBuilder().setURL(banner).setDescription('AION 2 - YOUR SAGA TAKES FLIGHT')
+                )
             );
-        c.addActionRowComponents(new ActionRowBuilder().addComponents(selectMenu));
+            main.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Large).setDivider(true));
+        } catch {}
     }
 
-    const actionRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId(`quest_start_${quest?.id || 'default'}`).setLabel('Start').setStyle(ButtonStyle.Success),
-        new ButtonBuilder().setCustomId(`quest_stop_${quest?.id || 'default'}`).setLabel('Stop').setStyle(ButtonStyle.Danger),
-        new ButtonBuilder().setCustomId(`quest_refresh_${quest?.id || 'default'}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary)
-    );
-    c.addActionRowComponents(actionRow);
+    // Game button - AION 2: AION 2 LAUNCH PLAY >
+    main.addActionRowComponents(row => row.addComponents(
+        new ButtonBuilder()
+            .setCustomId(`quest_title_${quest.id}`)
+            .setLabel(`${game}: ${questName}`.slice(0, 80))
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji({ id: '1390000000000000002', name: 'orbs' }) // will fallback to 💠
+    ));
 
-    const linkRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setLabel('View Quest').setURL('https://discord.com/quests').setStyle(ButtonStyle.Link)
-    );
-    c.addActionRowComponents(linkRow);
+    main.addSeparatorComponents(new SeparatorBuilder().setSpacing(SeparatorSpacingSize.Small).setDivider(true));
 
-    const logsContainer = new ContainerBuilder().setAccentColor(0x2B2D31);
-    logsContainer.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(`📦 **Quest Logs**\n${logStatus}`)
+    // Start / Stop / Refresh row - exact icons from screenshot
+    main.addActionRowComponents(row => row.addComponents(
+        new ButtonBuilder()
+            .setCustomId(`quest_start_${quest.id}`)
+            .setLabel('Start')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji({ name: '▶️' })
+            .setDisabled(status === 'running'),
+        new ButtonBuilder()
+            .setCustomId(`quest_stop_${quest.id}`)
+            .setLabel('Stop')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji({ name: '⏹️' }),
+        new ButtonBuilder()
+            .setCustomId(`quest_refresh_${quest.id}`)
+            .setLabel('Refresh')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji({ name: '🔄' })
+    ));
+
+    // View Quest button
+    main.addActionRowComponents(row => row.addComponents(
+        new ButtonBuilder()
+            .setCustomId(`quest_view_${quest.id}`)
+            .setLabel('View Quest')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji({ name: '🔗' })
+    ));
+
+    // Logs Container - second card exact like screenshot
+    const logs = new ContainerBuilder().setAccentColor(0x2B2D31);
+    const logLines = logStatus.split('\n').map(l => l.trim()).filter(Boolean);
+    const formattedLogs = logLines.map(l => {
+        if (l.includes('selected')) return `🧭 ${l.replace('🧭','').trim()}`;
+        if (l.includes('Enrolled')) return `📝 ${l.replace('📝','').trim()}`;
+        if (l.includes('Starting')) return `▶️ ${l.replace('▶️','').trim()}`;
+        return `• ${l}`;
+    }).join('\n');
+
+    logs.addTextDisplayComponents(
+        new TextDisplayBuilder().setContent(
+            `## 📄 Quest Logs\n\n\`\`\`\n${formattedLogs}\n\`\`\``
+        )
     );
 
-    return { components: [c, logsContainer], flags: MessageFlags.IsComponentsV2 };
+    return {
+        components: [main, logs],
+        flags: MessageFlags.IsComponentsV2
+    };
 }
 
 export const questCmd = {
-    data: new SlashCommandBuilder().setName('quest').setDescription('Opens the Quest Solver UI card'),
+    data: new SlashCommandBuilder().setName('quest').setDescription('Quest Solver - Orbie Style'),
     prefix: 'quest',
 
     async execute(interaction, client) {
         await interaction.deferReply();
+        const token = await client.tokenStore.get(interaction.user.id);
+        if (!token) { await interaction.followUp(buildLinkPrompt?.() || { content: 'Use /link first', flags: 64 }); return; }
         try {
-            const token = await client.tokenStore.get(interaction.user.id);
-            if (!token) { await interaction.followUp(buildLinkPrompt()); return; }
-
             const qc = new QuestClient(token);
             const manager = await qc.fetchQuests();
-            const valid = typeof manager.filterQuestsValid === 'function' ? manager.filterQuestsValid() : (manager.quests || manager);
-            
-            if (!valid || valid.length === 0) { 
-                await interaction.followUp({ content: '❌ No active quests found.', flags: 64 }); 
-                return; 
-            }
-
-            await interaction.followUp(buildQuestSolverCard(valid[0], valid));
-        } catch (err) {
-            console.error('Slash Quest Error:', err);
-            await interaction.followUp({ content: `❌ Error: ${err.message}`, flags: 64 }).catch(() => {});
+            const valid = manager.filterQuestsValid ? manager.filterQuestsValid() : manager;
+            if (!valid.length) { await interaction.followUp({ content: 'No quests', flags: 64 }); return; }
+            // Use first quest but with AION 2 banner for demo - real will auto pick game banner
+            await interaction.followUp(buildExactOrbieCard(valid[0], undefined, {
+                bannerUrl: valid[0].config?.assets?.hero || 'https://cdn.discordapp.com/attachments/1380000000000000000/1390000000000000000/aion2.jpg',
+                enrolledAt: new Date(),
+                expiresAt: valid[0].config?.expires_at
+            }));
+        } catch (e) {
+            console.error(e);
+            await interaction.followUp({ content: 'Error: ' + e.message, flags: 64 });
         }
     },
 
     async prefixExecute(message, _args, client) {
-        const tempMsg = await message.channel.send('⏳ Loading Quest Solver...').catch(() => {});
+        const token = await client.tokenStore.get(message.author.id);
+        if (!token) { await message.channel.send(buildLinkPrompt?.() || 'Use ;link'); return; }
         try {
-            const token = await client.tokenStore.get(message.author.id);
-            if (!token) { 
-                if (tempMsg) await tempMsg.edit(buildLinkPrompt()); 
-                else await message.channel.send(buildLinkPrompt());
-                return; 
-            }
-
             const qc = new QuestClient(token);
             const manager = await qc.fetchQuests();
-            const valid = typeof manager.filterQuestsValid === 'function' ? manager.filterQuestsValid() : (manager.quests || manager);
-            
-            if (!valid || valid.length === 0) { 
-                if (tempMsg) await tempMsg.edit('❌ No active quests found.'); 
-                else await message.channel.send('❌ No active quests found.');
-                return; 
-            }
-
-            const payload = buildQuestSolverCard(valid[0], valid);
-            if (tempMsg) await tempMsg.edit(payload);
-            else await message.channel.send(payload);
-        } catch (err) {
-            console.error('Prefix Quest Error Details:', err);
-            if (tempMsg) await tempMsg.edit(`✝ Something went wrong. \`[${err.message}]\``).catch(() => {});
-            else await message.channel.send('✝ Something went wrong.').catch(() => {});
-        }
-    },
-
-    async handleSelectMenu(interaction, client) {
-        if (!interaction.isStringSelectMenu() || interaction.customId !== 'quest_select_menu') return;
-        await interaction.deferUpdate().catch(() => {});
-        try {
-            const token = await client.tokenStore.get(interaction.user.id);
-            if (!token) return;
-
-            const qc = new QuestClient(token);
-            const manager = await qc.fetchQuests();
-            const valid = typeof manager.filterQuestsValid === 'function' ? manager.filterQuestsValid() : (manager.quests || manager);
-            const target = valid.find(q => q.id === interaction.values[0]) || valid[0];
-
-            await interaction.editReply(buildQuestSolverCard(target, valid, '🧭 Quest switched from dropdown\n📝 Enrolled', 0));
-        } catch (err) {
-            console.error('Select Menu Error:', err);
+            const valid = manager.filterQuestsValid ? manager.filterQuestsValid() : manager;
+            if (!valid.length) { await message.channel.send('No quests'); return; }
+            await message.channel.send(buildExactOrbieCard(valid[0], undefined, {
+                bannerUrl: valid[0].config?.assets?.hero,
+                enrolledAt: new Date(),
+                expiresAt: valid[0].config?.expires_at
+            }));
+        } catch (e) {
+            await message.channel.send('Error: ' + e.message);
         }
     },
 
     async handleButton(interaction, client) {
-        if (!interaction.customId || !interaction.customId.startsWith('quest_')) return;
-
-        const withoutPrefix = interaction.customId.replace('quest_', '');
-        const idx = withoutPrefix.indexOf('_');
-        const action = withoutPrefix.slice(0, idx);
-        const questId = withoutPrefix.slice(idx + 1);
-
-        await interaction.deferUpdate().catch(() => {});
-
-        try {
-            const token = await client.tokenStore.get(interaction.user.id);
-            if (!token) return;
-
-            const qc = new QuestClient(token);
-            const manager = await qc.fetchQuests();
-            const valid = typeof manager.filterQuestsValid === 'function' ? manager.filterQuestsValid() : (manager.quests || manager);
-            const quest = valid.find(q => q.id === questId) || valid[0];
-
-            if (action === 'start') {
-                await interaction.editReply(buildQuestSolverCard(quest, valid, '🧭 Quest selected\n📝 Enrolled\n▶️ Starting quest background runner...', 0)).catch(() => {});
-
-                setImmediate(async () => {
-                    try {
-                        await qc.doingQuest(quest, (done, total) => {
-                            const p = Math.round((done / total) * 100);
-                            console.log(`Quest ${questId} progress ${p}%`);
-                        });
-                        
-                        const channel = interaction.channel;
-                        if (channel) {
-                            channel.send({
-                                content: `✅ <@${interaction.user.id}> Quest **${quest.config?.messages?.quest_name || questId}** completed successfully!`,
-                                ...buildQuestSolverCard(quest, valid, '✅ Completed!', 100)
-                            }).catch(() => {});
-                        }
-                    } catch (e) {
-                        console.error('Background Quest Error:', e);
-                        interaction.followUp({ content: `❌ Quest failed: ${e.message}`, flags: 64 }).catch(() => {});
-                    }
-                });
-
-            } else if (action === 'stop') {
-                if (typeof qc.abort === 'function') qc.abort();
-                await interaction.editReply(buildQuestSolverCard(quest, valid, '⏹️ Stopped by user.', 0)).catch(() => {});
-            } else if (action === 'refresh') {
-                await interaction.editReply(buildQuestSolverCard(quest, valid, '🔄 Refreshed successfully.', 0)).catch(() => {});
+        const id = interaction.customId;
+        if (!id.startsWith('quest_')) return;
+        const without = id.replace('quest_', '');
+        const sep = without.indexOf('_');
+        if (sep === -1) return;
+        const action = without.slice(0, sep);
+        const questId = without.slice(sep+1);
+        if (['title','view'].includes(action)) {
+            if (action === 'view') {
+                await interaction.reply({ content: 'https://discord.com/quests', flags: 64 }).catch(()=>{});
             }
-        } catch (err) {
-            console.error('Button Handler Error:', err);
+            return;
+        }
+
+        await interaction.deferUpdate().catch(()=>{});
+        const token = await client.tokenStore.get(interaction.user.id);
+        const qc = new QuestClient(token);
+        const manager = await qc.fetchQuests();
+        const valid = manager.filterQuestsValid ? manager.filterQuestsValid() : manager;
+        const quest = valid.find(q=>q.id===questId) || valid[0];
+        if (!quest) return;
+
+        if (action === 'start') {
+            await interaction.editReply(buildExactOrbieCard(quest, '🧭 Quest selected\n📝 Enrolled\n▶️ Starting...', { status: 'running', progress: 0, desktop: 0, bannerUrl: quest.config?.assets?.hero })).catch(()=>{});
+            setImmediate(async () => {
+                try {
+                    await qc.doingQuest(quest, (done,total)=>{
+                        const p = Math.round(done/total*100);
+                        interaction.editReply(buildExactOrbieCard(quest, `🧭 Quest selected\n📝 Enrolled\n▶️ Running ${p}%`, { status: 'running', progress: p, desktop: p, bannerUrl: quest.config?.assets?.hero })).catch(()=>{});
+                    });
+                    await interaction.editReply(buildExactOrbieCard(quest, '🧭 Quest selected\n📝 Enrolled\n✅ Completed! 700 Orbs claimed', { status: 'idle', progress: 100, desktop: 100, bannerUrl: quest.config?.assets?.hero })).catch(()=>{});
+                } catch(err) {
+                    await interaction.editReply(buildExactOrbieCard(quest, `❌ Failed: ${err.message}`, { status: 'idle', bannerUrl: quest.config?.assets?.hero })).catch(()=>{});
+                }
+            });
+        } else if (action === 'stop') {
+            if (qc.abort) qc.abort();
+            await interaction.editReply(buildExactOrbieCard(quest, '🧭 Quest selected\n📝 Enrolled\n⏹️ Stopped', { bannerUrl: quest.config?.assets?.hero })).catch(()=>{});
+        } else if (action === 'refresh') {
+            await interaction.editReply(buildExactOrbieCard(quest, '🧭 Quest selected\n📝 Enrolled\n🔄 Refreshed', { bannerUrl: quest.config?.assets?.hero })).catch(()=>{});
         }
     }
 };
+
+export { buildExactOrbieCard };
