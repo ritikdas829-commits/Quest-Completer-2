@@ -1,5 +1,5 @@
 import { getAutoquestUsers } from '../quest/autoquestStore.js';
-import { runAutoquestForUser } from '../commands/questCommands.js';
+import { runAutoquestForUser } from '../commands/autoquestCommands.js';
 import { QuestClient } from '../quest/questClient.js';
 
 const POLL_INTERVAL_MS = 5 * 60 * 1000; // check every 5 minutes
