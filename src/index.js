@@ -65,20 +65,28 @@ const client = new Client({
 
 client.commands       = new Collection();
 client.prefixCommands = new Collection();
-client.tokenStore     = new TokenStore();
+client.tokenStore     = new TokenStore(process.env.ENCRYPTION_KEY || TOKEN);
 
 const commandFiles = readdirSync(join(__dirname, 'commands')).filter(f => f.endsWith('.js'));
 for (const file of commandFiles) {
     const mod = await import(pathToFileURL(join(__dirname, 'commands', file)).href);
     if (mod.default) {
         const cmd = mod.default;
-        if (cmd?.data)   client.commands.set(cmd.data.name, cmd);
-        if (cmd?.prefix) client.prefixCommands.set(cmd.prefix, cmd);
+        if (cmd?.data?.name && !client.commands.has(cmd.data.name)) {
+            client.commands.set(cmd.data.name, cmd);
+        }
+        if (cmd?.prefix && !client.prefixCommands.has(cmd.prefix)) {
+            client.prefixCommands.set(cmd.prefix, cmd);
+        }
     }
     for (const [key, cmd] of Object.entries(mod)) {
         if (['default', 'makeTokenStore', 'handleLinkModal', 'handleLinkPromptButton', 'runAutoquestForUser', 'buildLinkModal', 'buildLinkPrompt'].includes(key)) continue;
-        if (cmd?.data)   client.commands.set(cmd.data.name, cmd);
-        if (cmd?.prefix) client.prefixCommands.set(cmd.prefix, cmd);
+        if (cmd?.data?.name && !client.commands.has(cmd.data.name)) {
+            client.commands.set(cmd.data.name, cmd);
+        }
+        if (cmd?.prefix && !client.prefixCommands.has(cmd.prefix)) {
+            client.prefixCommands.set(cmd.prefix, cmd);
+        }
     }
 }
 
