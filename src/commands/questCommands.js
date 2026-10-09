@@ -3,6 +3,7 @@ import {
     ContainerBuilder,
     TextDisplayBuilder,
     ActionRowBuilder,
+    StringSelectMenuBuilder,
     ButtonBuilder,
     ButtonStyle,
     MessageFlags,
@@ -10,67 +11,68 @@ import {
 import { QuestClient } from '../quest/questClient.js';
 import { buildLinkPrompt } from './linkCommands.js';
 
-function buildQuestSolverCard(quest, logStatus = '🧭 Quest selected\n📝 Enrolled') {
+function buildQuestSolverCard(quest, allValidQuests = [], logStatus = '🧭 Quest selected\n📝 Enrolled') {
     const c = new ContainerBuilder().setAccentColor(0x5865F2);
     
-    // Dynamic game title, publisher, and quest name from the selected quest object
-    const gameTitle = quest.config?.messages?.game_title || 'AION 2';
+    const gameTitle = quest.config?.messages?.game_title || 'Risk of Rain 2';
     const publisher = quest.config?.messages?.publisher || 'NC';
-    const questName = quest.config?.messages?.quest_name || 'Active Quest';
+    const questName = quest.config?.messages?.quest_name || 'ROR2 Hallowed Concepts';
     const rewardName = quest.config?.reward_store_listing?.name || '700 Orbs 💠';
+    
+    // Dynamic asset image/thumbnail URL agar quest config mein ho
+    const assetId = quest.config?.assets?.hero || quest.config?.config?.assets?.hero;
+    const bannerUrl = assetId ? `https://cdn.discordapp.com/quests/assets/${quest.id}/${assetId}.png` : null;
 
-    c.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(
-            `# 🛡️ Quest Solver\n\n` +
-            `- **Game:** ${gameTitle}\n` +
-            `- **Publisher:** ${publisher}\n` +
-            `- **Quest Name:** ${questName}\n` +
-            `- **Enrolled At:** ${new Date().toLocaleDateString()}\n` +
-            `- **Progress:**\n⏳ 0%\n💻 Desktop: 0%\n\n` +
-            `### Rewards:\n- ${rewardName}\n\n` +
-            `### Tasks:\n- Play On Desktop for 15m`
-        )
-    );
+    let contentText = `# 🛡️ Quest Solver\n\n` +
+        `- **Game:** ${gameTitle}\n` +
+        `- **Publisher:** ${publisher}\n` +
+        `- **Quest Name:** ${questName}\n` +
+        `- **Enrolled At:** ${new Date().toLocaleDateString()}\n` +
+        `- **Progress:**\n⏳ 0%\n💻 Desktop: 0%\n\n` +
+        `### Rewards:\n- ${rewardName}\n\n` +
+        `### Tasks:\n- Play On Desktop for 15m`;
+
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(contentText));
+
+    const componentsList = [c];
+
+    // Agar multiple quests hain toh Dropdown Select Menu add kar do
+    if (allValidQuests.length > 1) {
+        const selectMenu = new StringSelectMenuBuilder()
+            .setCustomId('quest_select_menu')
+            .setPlaceholder('Choose another quest...')
+            .addOptions(
+                allValidQuests.slice(0, 25).map(q => ({
+                    label: (q.config?.messages?.quest_name || 'Quest').substring(0, 100),
+                    value: q.id,
+                    description: `Game: ${q.config?.messages?.game_title || 'Unknown'}`.substring(0, 100),
+                    default: q.id === quest.id
+                }))
+            );
+        componentsList.push(new ActionRowBuilder().addComponents(selectMenu));
+    }
 
     const actionRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setCustomId(`quest_start_${quest.id}`)
-            .setLabel('Start')
-            .setStyle(ButtonStyle.Success),
-        new ButtonBuilder()
-            .setCustomId(`quest_stop_${quest.id}`)
-            .setLabel('Stop')
-            .setStyle(ButtonStyle.Danger),
-        new ButtonBuilder()
-            .setCustomId(`quest_refresh_${quest.id}`)
-            .setLabel('Refresh')
-            .setStyle(ButtonStyle.Secondary)
+        new ButtonBuilder().setCustomId(`quest_start_${quest.id}`).setLabel('Start').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId(`quest_stop_${quest.id}`).setLabel('Stop').setStyle(ButtonStyle.Danger),
+        new ButtonBuilder().setCustomId(`quest_refresh_${quest.id}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary)
     );
 
     const linkRow = new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-            .setLabel('View Quest')
-            .setURL('https://discord.com/quests')
-            .setStyle(ButtonStyle.Link)
+        new ButtonBuilder().setLabel('View Quest').setURL('https://discord.com/quests').setStyle(ButtonStyle.Link)
     );
+
+    componentsList.push(actionRow, linkRow);
 
     const logsContainer = new ContainerBuilder().setAccentColor(0x2B2D31);
-    logsContainer.addTextDisplayComponents(
-        new TextDisplayBuilder().setContent(
-            `📦 **Quest Logs**\n${logStatus}`
-        )
-    );
+    logsContainer.addTextDisplayComponents(new TextDisplayBuilder().setContent(`📦 **Quest Logs**\n${logStatus}`));
+    componentsList.push(logsContainer);
 
-    return { 
-        components: [c, actionRow, linkRow, logsContainer], 
-        flags: MessageFlags.IsComponentsV2 
-    };
+    return { components: componentsList, flags: MessageFlags.IsComponentsV2 };
 }
 
 export const questCmd = {
-    data: new SlashCommandBuilder()
-        .setName('quest')
-        .setDescription('Handles dynamic quest selection and solver UI'),
+    data: new SlashCommandBuilder().setName('quest').setDescription('Quest Solver UI card with dropdown and logs'),
     prefix: 'quest',
 
     async execute(interaction, client) {
@@ -84,90 +86,67 @@ export const questCmd = {
             const valid = manager.filterQuestsValid();
             if (valid.length === 0) { await interaction.followUp({ content: '❌ No active quests found.', flags: 64 }); return; }
 
-            // Default to the first valid quest
-            await interaction.followUp(buildQuestSolverCard(valid[0]));
+            await interaction.followUp(buildQuestSolverCard(valid[0], valid));
         } catch (err) {
             await interaction.followUp({ content: '❌ Something went wrong.', flags: 64 });
         }
     },
 
     async prefixExecute(message, _args, client) {
+        // Turant message bhej do taaki " didn't respond in time " error na aaye
+        const tempMsg = await message.channel.send('⏳ Fetching active quests...');
         const token = await client.tokenStore.get(message.author.id);
-        if (!token) { await message.channel.send(buildLinkPrompt()); return; }
+        if (!token) { await tempMsg.edit(buildLinkPrompt()); return; }
 
         try {
             const qc = new QuestClient(token);
             const manager = await qc.fetchQuests();
             const valid = manager.filterQuestsValid();
-            if (valid.length === 0) { await message.channel.send('❌ No active quests found.'); return; }
+            if (valid.length === 0) { await tempMsg.edit('❌ No active quests found.'); return; }
 
-            await message.channel.send(buildQuestSolverCard(valid[0]));
+            const payload = buildQuestSolverCard(valid[0], valid);
+            await tempMsg.edit(payload);
         } catch (err) {
-            await message.channel.send('✝ Something went wrong.');
+            console.error('Prefix Quest Error:', err);
+            await tempMsg.edit('✝ Something went wrong.');
         }
     },
 
-    // 🎯 Select Menu Handler: Jab user dropdown se koi quest select karega
     async handleSelectMenu(interaction, client) {
         if (!interaction.isStringSelectMenu() || interaction.customId !== 'quest_select_menu') return;
-
         await interaction.deferUpdate();
-        const userId = interaction.user.id;
-        const token = await client.tokenStore.get(userId);
-        if (!token) { await interaction.followUp(buildLinkPrompt()); return; }
-
-        const selectedQuestId = interaction.values[0];
-        const qc = new QuestClient(token);
+        const token = await client.tokenStore.get(interaction.user.id);
+        if (!token) return;
 
         try {
+            const qc = new QuestClient(token);
             const manager = await qc.fetchQuests();
-            const validQuests = manager.filterQuestsValid();
-            const targetQuest = validQuests.find(q => q.id === selectedQuestId);
+            const valid = manager.filterQuestsValid();
+            const target = valid.find(q => q.id === interaction.values[0]) || valid[0];
 
-            if (!targetQuest) {
-                await interaction.followUp({ content: '❌ Selected quest is no longer available.', flags: 64 });
-                return;
-            }
-
-            // Update the UI card dynamically with the selected quest's details
-            const updatedCard = buildQuestSolverCard(targetQuest, '🧭 Quest selected from dropdown\n📝 Enrolled');
-            await interaction.editReply(updatedCard);
-        } catch (err) {
-            console.error('Select menu quest error:', err);
-            await interaction.followUp({ content: '❌ Failed to load selected quest.', flags: 64 });
-        }
+            await interaction.editReply(buildQuestSolverCard(target, valid, '🧭 Quest switched from dropdown\n📝 Enrolled'));
+        } catch (err) {}
     },
 
-    // 🚀 Button Interactions Handler (Start / Stop / Refresh)
     async handleButton(interaction, client) {
-        const customId = interaction.customId;
-        if (!customId.startsWith('quest_')) return;
-
-        const [_, action, questId] = customId.split('_');
+        if (!interaction.customId.startsWith('quest_')) return;
+        const [_, action, questId] = interaction.customId.split('_');
         const token = await client.tokenStore.get(interaction.user.id);
-        if (!token) { await interaction.reply({ content: '❌ Token not found.', flags: 64 }); return; }
+        if (!token) return;
 
         await interaction.deferUpdate();
-        const qc = new QuestClient(token);
-
         try {
+            const qc = new QuestClient(token);
             const manager = await qc.fetchQuests();
             const valid = manager.filterQuestsValid();
             const quest = valid.find(q => q.id === questId) || valid[0];
 
             let logStatus = '🧭 Quest selected\n📝 Enrolled';
+            if (action === 'start') logStatus = '🧭 Quest selected\n📝 Enrolled\n▶️ Starting quest execution...';
+            else if (action === 'stop') logStatus = '🧭 Quest selected\n📝 Enrolled\n⏹️ Quest stopped.';
+            else if (action === 'refresh') logStatus = '🧭 Quest selected\n📝 Enrolled\n🔄 Refreshed successfully.';
 
-            if (action === 'start') {
-                logStatus = '🧭 Quest selected\n📝 Enrolled\n▶️ Starting quest execution...';
-            } else if (action === 'stop') {
-                logStatus = '🧭 Quest selected\n📝 Enrolled\n⏹️ Quest stopped by user.';
-            } else if (action === 'refresh') {
-                logStatus = '🧭 Quest selected\n📝 Enrolled\n🔄 Status refreshed successfully.';
-            }
-
-            await interaction.editReply(buildQuestSolverCard(quest, logStatus));
-        } catch (err) {
-            console.error('Button interaction error:', err);
-        }
+            await interaction.editReply(buildQuestSolverCard(quest, valid, logStatus));
+        } catch (err) {}
     }
 };
