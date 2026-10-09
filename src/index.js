@@ -4,8 +4,7 @@ import { readdirSync } from 'fs';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { dirname, join } from 'path';
 import deployCommands from './utils/deployCommands.js';
-import { makeTokenStore } from './commands/questCommands.js';
-import { writeFileSync, existsSync } from 'fs';
+import { TokenStore } from './quest/tokenStore.js';
 import mongoose from 'mongoose';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -51,10 +50,6 @@ try {
     process.exit(1);
 }
 
-// Ensure data files exist
-if (!existsSync('tokens.json'))    writeFileSync('tokens.json', '{}');
-if (!existsSync('autoquest.json')) writeFileSync('autoquest.json', '[]');
-
 banner();
 await deployCommands(TOKEN, process.env.DISCORD_CLIENT_ID);
 
@@ -70,7 +65,7 @@ const client = new Client({
 
 client.commands       = new Collection();
 client.prefixCommands = new Collection();
-client.tokenStore     = makeTokenStore(TOKEN);
+client.tokenStore     = new TokenStore();
 
 const commandFiles = readdirSync(join(__dirname, 'commands')).filter(f => f.endsWith('.js'));
 for (const file of commandFiles) {
@@ -81,7 +76,7 @@ for (const file of commandFiles) {
         if (cmd?.prefix) client.prefixCommands.set(cmd.prefix, cmd);
     }
     for (const [key, cmd] of Object.entries(mod)) {
-        if (key === 'default' || key === 'makeTokenStore' || key === 'handleLinkModal' || key === 'handleLinkPromptButton' || key === 'runAutoquestForUser') continue;
+        if (['default', 'makeTokenStore', 'handleLinkModal', 'handleLinkPromptButton', 'runAutoquestForUser', 'buildLinkModal', 'buildLinkPrompt'].includes(key)) continue;
         if (cmd?.data)   client.commands.set(cmd.data.name, cmd);
         if (cmd?.prefix) client.prefixCommands.set(cmd.prefix, cmd);
     }
