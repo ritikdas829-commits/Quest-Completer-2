@@ -6,6 +6,7 @@ import { dirname, join } from 'path';
 import deployCommands from './utils/deployCommands.js';
 import { makeTokenStore } from './commands/questCommands.js';
 import { writeFileSync, existsSync } from 'fs';
+import mongoose from 'mongoose';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname  = dirname(__filename);
@@ -37,6 +38,19 @@ function banner() {
 const TOKEN = process.env.DISCORD_TOKEN;
 if (!TOKEN) { console.error('DISCORD_TOKEN is not set.'); process.exit(1); }
 
+// MongoDB Connection Setup
+try {
+    if (!process.env.MONGO_URI) {
+        console.error('MONGO_URI is not set in environment variables.');
+        process.exit(1);
+    }
+    await mongoose.connect(process.env.MONGO_URI);
+    console.log(`${col.green}● Connected to MongoDB successfully!${col.reset}`);
+} catch (error) {
+    console.error('Database connection failed:', error);
+    process.exit(1);
+}
+
 // Ensure data files exist
 if (!existsSync('tokens.json'))    writeFileSync('tokens.json', '{}');
 if (!existsSync('autoquest.json')) writeFileSync('autoquest.json', '[]');
@@ -61,13 +75,11 @@ client.tokenStore     = makeTokenStore(TOKEN);
 const commandFiles = readdirSync(join(__dirname, 'commands')).filter(f => f.endsWith('.js'));
 for (const file of commandFiles) {
     const mod = await import(pathToFileURL(join(__dirname, 'commands', file)).href);
-    // Single default export
     if (mod.default) {
         const cmd = mod.default;
         if (cmd?.data)   client.commands.set(cmd.data.name, cmd);
         if (cmd?.prefix) client.prefixCommands.set(cmd.prefix, cmd);
     }
-    // Named exports (questCommands.js has multiple)
     for (const [key, cmd] of Object.entries(mod)) {
         if (key === 'default' || key === 'makeTokenStore' || key === 'handleLinkModal' || key === 'handleLinkPromptButton' || key === 'runAutoquestForUser') continue;
         if (cmd?.data)   client.commands.set(cmd.data.name, cmd);
