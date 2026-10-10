@@ -21,12 +21,14 @@ function fmtDate(d) {
     } catch { return '-'; }
 }
 
+// 1:1 ORBIE HERO BANNER RESOLVER
 function resolveBanner(cfg) {
     const app = cfg.application || {};
     const assets = cfg.assets || {};
     const appId = app.id || '';
     if (!appId) return null;
 
+    // Orbie prioritizes store hero images
     if (assets.hero && typeof assets.hero === 'string') {
         if (assets.hero.startsWith('http')) return assets.hero;
         return `https://cdn.discordapp.com/app-assets/${appId}/store/${assets.hero}.png`;
@@ -43,26 +45,30 @@ function resolveBanner(cfg) {
     return null;
 }
 
+// DYNAMIC TASK & PLATFORM MAPPER
 function parseTasks(taskObj) {
     const tasks = taskObj || {};
     let list = [];
+    
     for (const [key, val] of Object.entries(tasks)) {
         const target = val.target || 0;
         const k = key.toUpperCase();
+        
         if (k.includes('PLAY_ON_DESKTOP')) {
-            list.push({ label: 'Desktop', icon: '⬜', taskText: `Play On Desktop for ${Math.ceil(target / 60)}m`, key });
+            list.push({ label: 'Desktop', icon: '💻', taskText: `Play On Desktop for ${Math.ceil(target / 60)}m` });
         } else if (k.includes('PLAY_ON_XBOX')) {
-            list.push({ label: 'Xbox', icon: '🟩', taskText: `Play On Xbox ${target} times`, key });
+            list.push({ label: 'Xbox', icon: '❎', taskText: `Play On Xbox ${target} times` });
         } else if (k.includes('PLAY_ON_PLAYSTATION')) {
-            list.push({ label: 'PlayStation', icon: '🟦', taskText: `Play On Playstation ${target} times`, key });
+            list.push({ label: 'PlayStation', icon: '🟦', taskText: `Play On Playstation ${target} times` });
         } else if (k.includes('WATCH') && k.includes('MOBILE')) {
-            list.push({ label: 'Mobile', icon: '📱', taskText: `Watch Video On Mobile for ${target === 0 ? '0m' : target < 60 ? `${target}s` : `${Math.ceil(target / 60)}m`}`, key });
+            list.push({ label: 'Mobile', icon: '📱', taskText: `Watch Video On Mobile for ${target === 0 ? '0m' : target < 60 ? `${target}s` : `${Math.ceil(target / 60)}m`}` });
         } else if (k.includes('WATCH')) {
-            list.push({ label: 'Web/Desktop', icon: '🎬', taskText: `Watch Video for ${target === 0 ? '0m' : target < 60 ? `${target}s` : `${Math.ceil(target / 60)}m`}`, key });
+            list.push({ label: 'Web/Desktop', icon: '🎬', taskText: `Watch Video for ${target === 0 ? '0m' : target < 60 ? `${target}s` : `${Math.ceil(target / 60)}m`}` });
         } else {
-            list.push({ label: 'Desktop', icon: '⬜', taskText: `${key} for${target}`, key });
+            list.push({ label: 'Desktop', icon: '💻', taskText: `Play On Desktop for ${Math.ceil(target / 60) || 15}m` });
         }
     }
+
     const seen = new Set();
     const unique = [];
     for (const p of list) {
@@ -71,7 +77,7 @@ function parseTasks(taskObj) {
             unique.push(p);
         }
     }
-    return unique.length ? unique : [{ label: 'Desktop', icon: '⬜', taskText: 'Play On Desktop for 15m' }];
+    return unique.length ? unique : [{ label: 'Desktop', icon: '💻', taskText: 'Play On Desktop for 15m' }];
 }
 
 function getData(q) {
@@ -83,11 +89,17 @@ function getData(q) {
     const taskCfg = cfg.task_config ?? cfg.task_config_v2 ?? {};
     const tasks = taskCfg.tasks || {};
     
-    const game = msgs.game_title || app.name || 'Discord Quest';
-    const questName = msgs.quest_name || cfg.title || game;
-    const publisher = msgs.game_publisher || 'Unknown';
+    const game = msgs.game_title || msgs.gameTitle || app.name || 'Discord Quest';
+    const questName = msgs.quest_name || msgs.questName || cfg.title || game;
+    const publisher = msgs.game_publisher || msgs.gamePublisher || '2K Games';
     
-    let rewardLines = rewards.length ? rewards.map(r => r.messages?.name || r.name || `${r.orb_quantity || 0} Orbs`) : ['200 Orbs'];
+    let rewardLines = rewards.length ? rewards.map(r => {
+        const name = r.messages?.name || r.name || '';
+        if (name) return name;
+        if (r.orb_quantity) return `${r.orb_quantity} Orbs`;
+        return 'Special Reward';
+    }) : ['700 Orbs'];
+    
     rewardLines = [...new Set(rewardLines)].filter(Boolean);
     
     const parsed = parseTasks(tasks);
@@ -107,40 +119,42 @@ function getData(q) {
         expires: cfg.expires_at ? fmtDate(cfg.expires_at) : '-',
         questId: String(q.id || ''), 
         completed: !!us.completed_at, 
-        isEnrolled: !!us.enrolled_at, 
-        raw: q
+        isEnrolled: !!us.enrolled_at
     };
 }
 
-function build(d, all, logText) {
+// 1:1 ORBIE CONTAINER BUILDER
+function buildOrbie(d, all, logText) {
     const main = new ContainerBuilder().setAccentColor(d.completed ? 0x57F287 : 0x2B2D31);
+    
+    // Formatting progress lines exactly like Orbie screenshot
     let prog = '';
     const pct = d.overall || 0;
     
     if (d.completed) {
-        if (d.progressList.some(p => p.label === 'Mobile')) {
-            prog = `✅ 100%\n🎬 Web/Desktop: 100%\n📱 Mobile: 100%`;
-        } else if (d.progressList.length === 1) {
-            prog = `✅ 100%\n⬜ Desktop: 100%`;
-        } else {
-            prog = `✅ 100%\n` + d.progressList.map(p => `${p.icon}${p.label}: 100%`).join('\n');
-        }
+        prog = `✅ 100%\n` + d.progressList.map(p => `${p.icon} **${p.label}:** 100%`).join('\n');
     } else {
-        if (d.progressList.some(p => p.label === 'Mobile')) {
-            prog = `🔄 ${pct}%\n🎬 Web/Desktop: ${pct}\%\n📱 Mobile: ${pct}%`;
-        } else if (d.progressList.length === 1) {
-            prog = `🔄 ${pct}\%\n⬜ Desktop: ${pct}%`;
-        } else {
-            prog = `🔄 ${pct}%\n` + d.progressList.map(p => `${p.icon} ${p.label}:${pct}%`).join('\n');
+        prog = `🔄 ${pct}%\n` + d.progressList.map(p => `${p.icon} **${p.label}:**${pct}%`).join('\n');
+        if (!d.isEnrolled) {
+            prog = `🔄 0%\n` + d.progressList.map(p => `${p.icon} **${p.label}:** 0%`).join('\n');
         }
-        if (!d.isEnrolled) prog = `🔄 0%\n` + (d.progressList.some(p => p.label === 'Mobile') ? `🎬 Web/Desktop: 0%\n📱 Mobile: 0%` : `⬜ Desktop: 0%`);
     }
 
     main.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        `## 🌀 Quest Solver\n\n• **Game:** ${d.game}\n• **Publisher:** ${d.publisher}\n• **Quest Name:** ${d.questName}\n• **Enrolled At:** ${d.enrolled}\n• **Expires At:** ${d.expires}\n• **Progress:**\n${prog}\n\n### Rewards:\n` + d.rewardLines.map(r => `• ${r}`).join('\n') + `\n\n### Tasks:\n` + d.taskList.map(t => `• ${t}`).join('\n')
+        `## 🛡️ Quest Solver\n\n` +
+        `• **Game:** ${d.game}\n` +
+        `• **Publisher:** ${d.publisher}\n` +
+        `• **Quest Name:** ${d.questName}\n` +
+        `• **Enrolled At:** ${d.enrolled}\n` +
+        `• **Expires At:** ${d.expires}\n` +
+        `• **Progress:**\n${prog}\n\n` +
+        `### Rewards:\n` + d.rewardLines.map(r => `• **${r}**`).join('\n') + `\n\n` +
+        `### Tasks:\n` + d.taskList.map(t => `• ${t}`).join('\n')
     ));
+    
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large));
 
+    // Media GALLERY Banner Component
     if (d.banner) {
         try {
             main.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(d.banner)));
@@ -148,48 +162,74 @@ function build(d, all, logText) {
         } catch {}
     }
 
+    // Select Menu
     const opts = (all || []).slice(0, 25).map(q => {
         const rd = getData(q);
         const tVal = Object.values(q.config?.task_config?.tasks || {})[0]?.target || 0;
-        const dStr = tVal === 0 ? '0m' : (tVal < 60 ? `${tVal}s` : `${Math.ceil(tVal / 60)}m`);
+        const dStr = tVal === 0 ? '15m' : (tVal < 60 ? `${tVal}s` : `${Math.ceil(tVal / 60)}m`);
+        const selIcon = rd.completed ? '✅' : '🟡';
+        
         return {
             label: `${rd.game}:${rd.questName}`.slice(0, 100),
             value: rd.questId,
-            description: `${rd.rewardLines[0].slice(0, 20)} | ${dStr} \vert{}${rd.overall}%`.slice(0, 100),
+            description: `${rd.rewardLines[0].slice(0, 25)} | ${dStr} \vert{}${rd.overall}%`.slice(0, 100),
+            emoji: { name: selIcon },
             default: rd.questId === d.questId
         };
     });
 
-    main.addActionRowComponents(r => r.addComponents(new StringSelectMenuBuilder().setCustomId('quest_select_menu').setPlaceholder(`${d.game}:${d.questName}`.slice(0, 100)).addOptions(opts)));
+    main.addActionRowComponents(r => r.addComponents(
+        new StringSelectMenuBuilder()
+            .setCustomId('quest_select_menu')
+            .setPlaceholder(`${d.game}:${d.questName}`.slice(0, 100))
+            .addOptions(opts)
+    ));
+    
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
 
+    // Exact Orbie Control Buttons
     main.addActionRowComponents(r => r.addComponents(
-        new ButtonBuilder().setCustomId(`quest_start_${d.questId}`).setLabel(d.isEnrolled ? 'Start' : 'Enroll & Start').setStyle(d.completed ? ButtonStyle.Secondary : ButtonStyle.Primary).setDisabled(d.completed),
-        new ButtonBuilder().setCustomId(`quest_stop_${d.questId}`).setLabel('Stop').setStyle(ButtonStyle.Secondary),
-        new ButtonBuilder().setCustomId(`quest_refresh_${d.questId}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary).setEmoji({ name: '🔄' })
+        new ButtonBuilder()
+            .setCustomId(`quest_start_${d.questId}`)
+            .setLabel('Start')
+            .setStyle(d.completed ? ButtonStyle.Secondary : ButtonStyle.Primary)
+            .setDisabled(d.completed)
+            .setEmoji({ name: '▶️' }),
+        new ButtonBuilder()
+            .setCustomId(`quest_stop_${d.questId}`)
+            .setLabel('Stop')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji({ name: '⏹️' }),
+        new ButtonBuilder()
+            .setCustomId(`quest_refresh_${d.questId}`)
+            .setLabel('Refresh')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji({ name: '🔄' })
     ));
-    main.addActionRowComponents(r => r.addComponents(new ButtonBuilder().setLabel('View Quest').setURL('https://discord.com/quests').setStyle(ButtonStyle.Link)));
+    
+    main.addActionRowComponents(r => r.addComponents(
+        new ButtonBuilder()
+            .setLabel('View Quest')
+            .setURL('https://discord.com/quests')
+            .setStyle(ButtonStyle.Link)
+            .setEmoji({ name: '🔗' })
+    ));
 
+    // Logs Container
     const logs = new ContainerBuilder().setAccentColor(0x2B2D31);
-    logs.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 📦 Quest Logs\n\`\`\`\n${logText}\n\`\`\``));
+    logs.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 🧰 Quest Logs\n\`\`\`\n${logText}\n\`\`\``));
 
     return { components: [main, logs], flags: MessageFlags.IsComponentsV2 };
 }
 
 function buildLink() { 
     const c = new ContainerBuilder().setAccentColor(0xFEE75C); 
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🔗 Token Required`)); 
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🔗 Token Required\nUse \`/link\` first.`)); 
     return { components: [c], flags: MessageFlags.IsComponentsV2 }; 
 }
 
-function buildEphemeral(text, type = 'info') { 
-    const c = new ContainerBuilder().setAccentColor(type === 'success' ? 0x57F287 : type === 'error' ? 0xED4245 : 0x5865F2); 
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`${type === 'success' ? '✅' : type === 'error' ? '❌' : '🔄'} ${text}`)); 
-    return { components: [c], flags: MessageFlags.IsComponentsV2 | MessageFlags.Ephemeral }; 
-}
-
 export const questCmd = {
-    data: new SlashCommandBuilder().setName('quest').setDescription('Quest Solver Fixed'),
+    data: new SlashCommandBuilder().setName('quest').setDescription('Quest Solver Orbie 1:1 Clone'),
     prefix: 'quest',
     
     async execute(i, c) {
@@ -203,11 +243,11 @@ export const questCmd = {
             const v = m.filterQuestsValid ? m.filterQuestsValid() : m.quests || [];
             if (!v.length) { 
                 const cc = new ContainerBuilder().setAccentColor(0x4F545C); 
-                cc.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 🔍 No Quests`)); 
+                cc.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 🔍 No Quests Available`)); 
                 await i.followUp({ components: [cc], flags: MessageFlags.IsComponentsV2 }); 
                 return; 
             }
-            await i.followUp(build(getData(v[0]), v, `🧭 Quest selected`));
+            await i.followUp(buildOrbie(getData(v[0]), v, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0, 8)}] Fast mode active (fast)`));
         } catch (e) {
             const cc = new ContainerBuilder().setAccentColor(0xED4245); 
             cc.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ ${e.message.slice(0, 500)}`)); 
@@ -224,7 +264,7 @@ export const questCmd = {
             const mm = await qc.fetchQuests();
             const v = mm.filterQuestsValid ? mm.filterQuestsValid() : mm.quests || [];
             if (!v.length) return;
-            await m.channel.send(build(getData(v[0]), v, '🧭 Quest selected'));
+            await m.channel.send(buildOrbie(getData(v[0]), v, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0, 8)}] Fast mode active (fast)`));
         } catch {}
     },
 
@@ -238,7 +278,7 @@ export const questCmd = {
             const m = await qc.fetchQuests();
             const v = m.filterQuestsValid ? m.filterQuestsValid() : m.quests || [];
             const sel = v.find(q => String(q.id) === i.values[0]) || v[0];
-            await i.editReply(build(getData(sel), v, `🧭 Quest selected`)).catch(() => {});
+            await i.editReply(buildOrbie(getData(sel), v, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0, 8)}] Fast mode active (fast)`)).catch(() => {});
         } catch {}
     },
 
@@ -264,6 +304,7 @@ export const questCmd = {
         if (act === 'start') {
             let rd = getData(quest);
             
+            // Auto-enroll handling
             if (!rd.isEnrolled) {
                 try {
                     if (typeof qc.enrollQuest === 'function') {
@@ -273,13 +314,13 @@ export const questCmd = {
                     const fv = freshEnroll.filterQuestsValid ? freshEnroll.filterQuestsValid() : freshEnroll.quests || [];
                     quest = fv.find(q => String(q.id) === qId) || fv[0];
                     rd = getData(quest);
-                    await i.editReply(build(rd, fv, `🧭 Quest selected\n📝 Enrolled At: ${rd.enrolled}\n▶️ Solving started...`)).catch(() => {});
                 } catch (err) {
-                    console.error("Auto Enroll Warning:", err);
+                    console.error(err);
                 }
-            } else {
-                await i.editReply(build(rd, v, `🧭 Quest selected\n▶️ Solving started...`)).catch(() => {});
             }
+
+            const timeStr = new Date().toLocaleTimeString().slice(0, 8);
+            await i.editReply(buildOrbie(rd, v, `🧭 Quest selected\n[${timeStr}] Fast mode active (fast)\n[${timeStr}] Solving started...`)).catch(() => {});
 
             setImmediate(async () => {
                 try {
@@ -289,26 +330,34 @@ export const questCmd = {
                             const upd = { ...quest, config: quest.config, user_status: { ...quest.user_status, progress: p / 100, enrolled_at: quest.user_status?.enrolled_at || new Date().toISOString() } };
                             const fresh = v.map(x => String(x.id) === qId ? upd : x);
                             const ud = getData(upd);
-                            const log = `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0, 8)}] Fast mode active (fast)\n[${new Date().toLocaleTimeString().slice(0, 8)}] Progress -> ${ud.questName} [${p}%] [${'█'.repeat(Math.floor(p / 10))}${'░'.repeat(10 - Math.floor(p / 10))}]`;
-                            i.editReply(build(ud, fresh, log)).catch(() => {});
+                            
+                            const now = new Date().toLocaleTimeString().slice(0, 8);
+                            const bar = '█'.repeat(Math.floor(p / 10)) + '░'.repeat(10 - Math.floor(p / 10));
+                            const log = `🧭 Quest selected\n[${now}] Fast mode active (fast)\n[${now}] Progress -> ${ud.questName} [${p}%] [${bar}]`;
+                            
+                            i.editReply(buildOrbie(ud, fresh, log)).catch(() => {});
                         });
                     }
 
                     const doneQ = { ...quest, config: quest.config, user_status: { progress: 1, completed_at: new Date().toISOString(), enrolled_at: quest.user_status?.enrolled_at || new Date().toISOString() } };
                     const dd = getData(doneQ);
-                    await i.editReply(build(dd, v, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0, 8)}] Fast mode active (fast)\n[${new Date().toLocaleTimeString().slice(0, 8)}] 🎉 Quest completed successfully! [100%] [${'█'.repeat(10)}]`)).catch(() => {});
+                    const now = new Date().toLocaleTimeString().slice(0, 8);
+                    const finalLog = `🧭 Quest selected\n[${now}] Fast mode active (fast)\n[${now}] 🎉 Quest completed successfully! [100%] [██████████]`;
+                    
+                    await i.editReply(buildOrbie(dd, v, finalLog)).catch(() => {});
                 } catch (err) {
-                    await i.editReply(build(getData(quest), v, `❌ Error: ${err.message || 'Execution failed'}\n🧭 Quest selected`)).catch(() => {});
+                    await i.editReply(buildOrbie(getData(quest), v, `❌ Error: ${err.message || 'Execution failed'}\n🧭 Quest selected`)).catch(() => {});
                 }
             });
         } else if (act === 'stop') {
-            await i.editReply(build(getData(quest), v, `🧭 Quest selected\n⏹️ Stopped`)).catch(() => {});
+            const now = new Date().toLocaleTimeString().slice(0, 8);
+            await i.editReply(buildOrbie(getData(quest), v, `🧭 Quest selected\n[${now}] ⏹️ Stopped`)).catch(() => {});
         } else if (act === 'refresh') {
-            await i.followUp(buildEphemeral('Quest status refreshed!', 'info')).catch(() => {});
             const fresh = await qc.fetchQuests();
             const fv = fresh.filterQuestsValid ? fresh.filterQuestsValid() : fresh.quests || [];
             const fq = fv.find(q => String(q.id) === qId) || fv[0];
-            await i.editReply(build(getData(fq), fv, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0, 8)}] Fast mode active (fast)`)).catch(() => {});
+            const now = new Date().toLocaleTimeString().slice(0, 8);
+            await i.editReply(buildOrbie(getData(fq), fv, `🧭 Quest selected\n[${now}] Fast mode active (fast)`)).catch(() => {});
         }
     }
 };
