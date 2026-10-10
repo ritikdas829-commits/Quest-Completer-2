@@ -13,7 +13,7 @@ import {
 } from 'discord.js';
 import { QuestClient } from '../quest/questClient.js';
 
-// Background running processes storage
+// Active background quest runners map
 const activeQuestRunners = new Map();
 
 function fmtDate(s) {
@@ -39,34 +39,46 @@ const PUBLISHER_MAP = {
 };
 
 function getReal(q) {
-    const cfg = q.config || {};
-    const app = cfg.application || q.application || {};
+    const cfg = q.config || q;
+    const app = cfg.application || {};
     const us = q.user_status || {};
-    const game = cfg.messages?.gameTitle || app.name || 'Discord';
-    let publisher = cfg.messages?.publisherName || app.publisher || null;
+    
+    const game = cfg.messages?.game_title || cfg.messages?.gameTitle || app.name || 'AION 2';
+    let publisher = cfg.messages?.publisher || cfg.messages?.publisherName || app.publisher || null;
+    
     if (!publisher) {
-        const low = (game + ' ' + (cfg.messages?.questName||'')).toLowerCase();
-        for (const [k,v] of Object.entries(PUBLISHER_MAP)) {
+        const low = (game + ' ' + (cfg.messages?.quest_name || cfg.messages?.questName || '')).toLowerCase();
+        for (const [k, v] of Object.entries(PUBLISHER_MAP)) {
             if (low.includes(k)) { publisher = v; break; }
         }
-        if (!publisher) publisher = 'Discord';
+        if (!publisher) publisher = 'NC';
     }
-    const questName = cfg.messages?.questName || game;
-    let banner = cfg.assets?.hero || cfg.assets?.heroVideo || cfg.assets?.gameTile || app.assets?.hero || cfg.assets?.icon || null;
-    if (banner && !banner.startsWith('http') && (cfg.application?.id || app.id)) {
-        banner = `https://cdn.discordapp.com/app-icons/${cfg.application?.id \vert{}\vert{} app.id}/${banner}.png`;
+    
+    const questName = cfg.messages?.quest_name || cfg.messages?.questName || game;
+    
+    // Robust Banner Resolution for Discord Quests
+    let banner = cfg.assets?.hero || cfg.assets?.heroVideo || cfg.assets?.gameTile || app.assets?.hero || null;
+    if (banner && !banner.startsWith('http')) {
+        // Construct Discord CDN quest asset URL if it's a hash/filename
+        banner = `https://cdn.discordapp.com/quests/${q.id \vert{}\vert{} cfg.id}/${banner}.png`;
+    } else if (!banner && cfg.application?.id) {
+        banner = `https://cdn.discordapp.com/app-icons/${cfg.application.id}/${app.icon || 'icon'}.png`;
     }
     if (!banner && game.toLowerCase().includes('risk of rain')) {
         banner = 'https://cdn.cloudflare.steamstatic.com/steam/apps/632360/header.jpg';
     }
-    const rewards = cfg.rewards || [];
-    const rewardCount = rewards[0]?.count || 700;
-    const taskCfg = cfg.task_config || {};
+
+    const rewards = cfg.rewards || cfg.reward_store_listing || [];
+    const rewardCount = rewards[0]?.count || rewards[0]?.reward?.amount || 700;
+    
+    const taskCfg = cfg.task_config || cfg.taskConfig || {};
     const task = Object.values(taskCfg.tasks || {})[0] || {};
-    const minutes = Math.round((task.target || 900)/60);
+    const minutes = Math.round((task.target || 900) / 60);
+    
     let enrolled = us.enrolled_at || new Date().toISOString();
-    const expires = cfg.expires_at;
+    const expires = cfg.expires_at || cfg.expiresAt;
     let progress = us.progress ? Math.round(us.progress * 100) : (us.completed_at ? 100 : 0);
+    
     return { game, publisher, questName, banner, rewardCount, minutes, enrolled, expires, progress, questId: String(q.id || cfg.id || 'default_quest') };
 }
 
@@ -82,6 +94,7 @@ function build(quest, allQuests, logStatus, opts = {}) {
     
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large));
     
+    // Dynamic Banner Renderer with strict validation
     const bUrl = opts.bannerUrl || d.banner;
     if (bUrl && typeof bUrl === 'string' && bUrl.startsWith('http')) {
         try { 
@@ -90,22 +103,23 @@ function build(quest, allQuests, logStatus, opts = {}) {
         } catch {}
     }
     
-    const placeholder = `🎮 ${d.game}:${d.questName}`.slice(0,100);
-    const selectOptions = (Array.isArray(allQuests) ? allQuests : [quest]).slice(0,25).map(q => {
+    // Select Menu Dropdown with crystal clear selected quest indicators, rewards & progress
+    const placeholder = `🎮 Select Quest (${allQuests.length} available)`;
+    const selectOptions = (Array.isArray(allQuests) ? allQuests : [quest]).slice(0, 25).map(q => {
         const rd = getReal(q);
         const isSel = rd.questId === d.questId;
         return { 
-            label: `${rd.game}:${rd.questName}`.slice(0,100), 
+            label: `${rd.game}:${rd.questName}`.slice(0, 100), 
             value: rd.questId || 'default_val', 
-            description: `${rd.rewardCount} Orbs | ${rd.progress}\%${isSel?' • Selected':''}`.slice(0,100), 
-            emoji: isSel?{name:'✅'}:{name:'🎮'}, 
+            description: `${rd.rewardCount} Orbs | Progress: ${rd.progress}\%${isSel ? ' • [SELECTED]' : ''}`.slice(0, 100), 
+            emoji: isSel ? { name: '✅' } : { name: '🎮' }, 
             default: isSel 
         };
     });
 
     const select = new StringSelectMenuBuilder()
         .setCustomId('quest_select_menu')
-        .setPlaceholder(placeholder)
+        .setPlaceholder(placeholder.slice(0, 100))
         .addOptions(selectOptions);
         
     main.addActionRowComponents(row => row.addComponents(select));
@@ -147,11 +161,11 @@ export const questCmd = {
             const valid = mgr.filterQuestsValid ? mgr.filterQuestsValid() : (mgr.quests || mgr.all || []);
             if (!valid.length) { 
                 const c = new ContainerBuilder().setAccentColor(0xFF0000); 
-                c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ No quests available`)); 
+                c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ No active quests available`)); 
                 await interaction.followUp({ components: [c], flags: MessageFlags.IsComponentsV2 }); 
                 return; 
             }
-            await interaction.followUp(build(valid[0], valid, 'Quest selected\nEnrolled'));
+            await interaction.followUp(build(valid[0], valid, '🧭 Quest selected\n📝 Enrolled'));
         } catch (e) { 
             console.error(e); 
             const c = new ContainerBuilder().setAccentColor(0xFF0000); 
@@ -169,11 +183,11 @@ export const questCmd = {
             const valid = mgr.filterQuestsValid ? mgr.filterQuestsValid() : (mgr.quests || mgr.all || []);
             if (!valid.length) { 
                 const c = new ContainerBuilder().setAccentColor(0xFF0000); 
-                c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ No quests available`)); 
+                c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ No active quests available`)); 
                 await message.channel.send({ components: [c], flags: MessageFlags.IsComponentsV2 }); 
                 return; 
             }
-            await message.channel.send(build(valid[0], valid, 'Quest selected\nEnrolled'));
+            await message.channel.send(build(valid[0], valid, '🧭 Quest selected\n📝 Enrolled'));
         } catch (e) { 
             console.error(e); 
         }
@@ -188,8 +202,8 @@ export const questCmd = {
             const qc = new QuestClient(token);
             const mgr = await qc.fetchQuests();
             const valid = mgr.filterQuestsValid ? mgr.filterQuestsValid() : (mgr.quests || mgr.all || []);
-            const sel = valid.find(q=> String(q.id||q.config?.id) === interaction.values[0]) || valid[0];
-            await interaction.editReply(build(sel, valid, 'Quest selected from menu\nEnrolled')).catch(()=>{});
+            const sel = valid.find(q => String(q.id || q.config?.id) === interaction.values[0]) || valid[0];
+            await interaction.editReply(build(sel, valid, '🧭 Quest switched from menu\n📝 Enrolled')).catch(()=>{});
         } catch(e) {
             console.error('Select menu error:', e);
         }
@@ -199,7 +213,7 @@ export const questCmd = {
         if (!interaction.customId.startsWith('quest_')) return;
         await interaction.deferUpdate().catch(()=>{});
         
-        const without = interaction.customId.replace('quest_','');
+        const without = interaction.customId.replace('quest_', '');
         const sep = without.indexOf('_');
         if (sep === -1) return;
         
@@ -213,12 +227,11 @@ export const questCmd = {
         const qc = new QuestClient(token);
         const mgr = await qc.fetchQuests();
         const valid = mgr.filterQuestsValid ? mgr.filterQuestsValid() : (mgr.quests || mgr.all || []);
-        const quest = valid.find(q=> String(q.id||q.config?.id) === qId) || valid[0];
+        const quest = valid.find(q => String(q.id || q.config?.id) === qId) || valid[0];
         
         if (action === 'start') {
-            await interaction.editReply(build(quest, valid, `Starting ${getReal(quest).questName}...`, {progress: 0, desktop: 0})).catch(()=>{});
+            await interaction.editReply(build(quest, valid, `▶️ Starting ${getReal(quest).questName}...`, {progress: 0, desktop: 0})).catch(()=>{});
             
-            // Register active process instance
             activeQuestRunners.set(`${userId}_${qId}`, qc);
 
             setImmediate(async () => {
@@ -226,19 +239,18 @@ export const questCmd = {
                     let lastProgress = 0;
                     await qc.doingQuest(quest, (done, total) => {
                         const p = Math.round((done / total) * 100);
-                        // Throttle edits to prevent rate limits
                         if (p - lastProgress >= 5 || p === 100) {
                             lastProgress = p;
-                            const freshList = valid.map(q => String(q.id||q.config?.id) === qId ? {...q, user_status:{progress: p/100}} : q);
-                            interaction.editReply(build({...quest, user_status:{progress: p/100}}, freshList, `Running ${p}% • ${getReal(quest).game}`, {progress: p, desktop: p})).catch(()=>{});
+                            const freshList = valid.map(q => String(q.id || q.config?.id) === qId ? {...q, user_status:{progress: p/100}} : q);
+                            interaction.editReply(build({...quest, user_status:{progress: p/100}}, freshList, `▶️ Running ${p}% • ${getReal(quest).game}`, {progress: p, desktop: p})).catch(()=>{});
                         }
                     });
                     
                     activeQuestRunners.delete(`${userId}_${qId}`);
-                    await interaction.editReply(build({...quest, user_status:{progress:1, completed_at:new Date().toISOString()}}, valid, `Completed! ${getReal(quest).questName}`, {progress: 100, desktop: 100})).catch(()=>{});
+                    await interaction.editReply(build({...quest, user_status:{progress: 1, completed_at: new Date().toISOString()}}, valid, `✅ Completed! ${getReal(quest).questName}`, {progress: 100, desktop: 100})).catch(()=>{});
                 } catch(err) { 
                     activeQuestRunners.delete(`${userId}_${qId}`);
-                    await interaction.editReply(build(quest, valid, `Failed: ${err.message}`)).catch(()=>{}); 
+                    await interaction.editReply(build(quest, valid, `❌ Failed: ${err.message}`)).catch(()=>{}); 
                 }
             });
         } else if (action === 'stop') {
@@ -248,13 +260,13 @@ export const questCmd = {
                 activeInstance.abort();
             }
             activeQuestRunners.delete(runnerKey);
-            await interaction.editReply(build(quest, valid, 'Stopped by user')).catch(()=>{});
+            await interaction.editReply(build(quest, valid, '⏹️ Stopped by user')).catch(()=>{});
         } else if (action === 'refresh') {
             const fresh = await qc.fetchQuests();
             const fValid = fresh.filterQuestsValid ? fresh.filterQuestsValid() : (fresh.quests || fresh.all || []);
-            const fQuest = fValid.find(q=> String(q.id||q.config?.id) === qId) || fValid[0];
+            const fQuest = fValid.find(q => String(q.id || q.config?.id) === qId) || fValid[0];
             const fd = getReal(fQuest);
-            await interaction.editReply(build(fQuest, fValid, `Refreshed - ${fd.progress}%`, {progress: fd.progress, desktop: fd.progress})).catch(()=>{});
+            await interaction.editReply(build(fQuest, fValid, `🔄 Refreshed - Progress: ${fd.progress}%`, {progress: fd.progress, desktop: fd.progress})).catch(()=>{});
         }
     }
 };
