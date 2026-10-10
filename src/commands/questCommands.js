@@ -55,21 +55,21 @@ function getReal(q) {
     
     const questName = cfg.messages?.quest_name || cfg.messages?.questName || game;
     
-    // Banner Resolution from Discord Quests CDN or App assets
+    // Clean Banner Resolution without syntax breaks
+    const qId = q.id || cfg.id || '';
     let banner = cfg.assets?.hero || cfg.assets?.heroVideo || cfg.assets?.gameTile || app.assets?.hero || null;
+    
     if (banner && !banner.startsWith('http')) {
-        banner = `https://cdn.discordapp.com/quests/${q.id \vert{}\vert{} cfg.id}/${banner}.png`;
+        banner = `https://cdn.discordapp.com/quests/${qId}/${banner}.png`;
     }
     if (!banner && game.toLowerCase().includes('risk of rain')) {
         banner = 'https://cdn.cloudflare.steamstatic.com/steam/apps/632360/header.jpg';
     }
 
-    // Rewards parsing
     const rewards = cfg.rewards || cfg.reward_store_listing || [];
     const rewardItem = rewards[0] || {};
     const rewardName = rewardItem.name || rewardItem.reward?.name || '700 Orbs 💠';
     
-    // Tasks parsing (Desktop, Xbox, PlayStation etc.)
     const taskCfg = cfg.task_config || cfg.taskConfig || {};
     const tasksMap = taskCfg.tasks || {};
     const tasksList = Object.values(tasksMap);
@@ -82,7 +82,6 @@ function getReal(q) {
 
     let enrolled = us.enrolled_at || new Date().toISOString();
     let expires = cfg.expires_at || cfg.expiresAt || '10/18/2026';
-    
     let progress = us.progress ? Math.round(us.progress * 100) : (us.completed_at ? 100 : 0);
     
     return { 
@@ -95,7 +94,7 @@ function getReal(q) {
         enrolled, 
         expires, 
         progress, 
-        questId: String(q.id || cfg.id || 'default_quest') 
+        questId: String(qId || 'default_quest') 
     };
 }
 
@@ -108,17 +107,22 @@ function build(quest, allQuests, logStatus, opts = {}) {
     
     main.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `## 🛡️ Quest Solver\n\n` +
-        `• **Game:** ${d.game}\n` +         `• **Publisher:** ${d.publisher}\n` +
+        `• **Game:** ${d.game}\n` +
+        `• **Publisher:** ${d.publisher}\n` +
         `• **Quest Name:** ${d.questName}\n` +
         `• **Enrolled At:** ${fmtDate(opts.enrolledAt || d.enrolled)}\n` +
-        `• **Expires At:** ${fmtDate(opts.expiresAt \vert{}\vert{} d.expires)}\n` +         `• **Progress:**\n` +         `${isCompleted ? '✅' : '⏳'} ${progress}\%\n` +         `💻 Desktop: ${progress}%\n\n` +
+        `• **Expires At:** ${fmtDate(opts.expiresAt || d.expires)}\n` +
+        `• **Progress:**\n` +
+        `${isCompleted ? '✅' : '⏳'} ${progress}%\n` +
+        `💻 Desktop: ${progress}%\n\n` +
         `### Rewards:\n` +
-        `• ${d.rewardName}\n\n` +         `### Tasks:\n` +         `${d.tasksFormatted}`
+        `• ${d.rewardName}\n\n` +
+        `### Tasks:\n` +
+        `${d.tasksFormatted}`
     ));
     
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large));
     
-    // Banner Image Display
     const bUrl = opts.bannerUrl || d.banner;
     if (bUrl && typeof bUrl === 'string' && bUrl.startsWith('http')) {
         try { 
@@ -127,7 +131,6 @@ function build(quest, allQuests, logStatus, opts = {}) {
         } catch {}
     }
     
-    // Select Menu Dropdown showing exact match with Orbie UI
     const placeholder = `${d.game}:${d.questName}`.slice(0, 100);
     const selectOptions = (Array.isArray(allQuests) ? allQuests : [quest]).slice(0, 25).map(q => {
         const rd = getReal(q);
@@ -135,15 +138,30 @@ function build(quest, allQuests, logStatus, opts = {}) {
         return { 
             label: `${rd.game}:${rd.questName}`.slice(0, 100), 
             value: rd.questId || 'default_val', 
-            description: `${rd.rewardName} \vert{}${rd.progress}%${isSel ? ' • Selected' : ''}`.slice(0, 100),              emoji: isSel ? { name: '✅' } : { name: '🎮' },              default: isSel          };     });      const select = new StringSelectMenuBuilder()         .setCustomId('quest_select_menu')         .setPlaceholder(placeholder)         .addOptions(selectOptions);              main.addActionRowComponents(row => row.addComponents(select));     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));          // Action Buttons     main.addActionRowComponents(row => row.addComponents(         new ButtonBuilder().setCustomId(`quest_start_${d.questId}`).setLabel('Start').setStyle(ButtonStyle.Secondary).setEmoji({name:'▶️'}).setDisabled(isCompleted),
-        new ButtonBuilder().setCustomId(`quest_stop_${d.questId}`).setLabel('Stop').setStyle(ButtonStyle.Secondary).setEmoji({name:'⏹️'}),         new ButtonBuilder().setCustomId(`quest_refresh_${d.questId}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary).setEmoji({name:'🔄'})
+            description: `${rd.rewardName} | ${rd.progress}\%${isSel ? ' • Selected' : ''}`.slice(0, 100), 
+            emoji: isSel ? { name: '✅' } : { name: '🎮' }, 
+            default: isSel 
+        };
+    });
+
+    const select = new StringSelectMenuBuilder()
+        .setCustomId('quest_select_menu')
+        .setPlaceholder(placeholder)
+        .addOptions(selectOptions);
+        
+    main.addActionRowComponents(row => row.addComponents(select));
+    main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
+    
+    main.addActionRowComponents(row => row.addComponents(
+        new ButtonBuilder().setCustomId(`quest_start_${d.questId}`).setLabel('Start').setStyle(ButtonStyle.Secondary).setEmoji({name:'▶️'}).setDisabled(isCompleted),
+        new ButtonBuilder().setCustomId(`quest_stop_${d.questId}`).setLabel('Stop').setStyle(ButtonStyle.Secondary).setEmoji({name:'⏹️'}),
+        new ButtonBuilder().setCustomId(`quest_refresh_${d.questId}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary).setEmoji({name:'🔄'})
     ));
     
     main.addActionRowComponents(row => row.addComponents(
         new ButtonBuilder().setLabel('View Quest').setURL('https://discord.com/quests').setStyle(ButtonStyle.Link).setEmoji({name:'🔗'})
     ));
     
-    // Quest Logs Container
     const logs = new ContainerBuilder().setAccentColor(0x2B2D31);
     logs.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 📦 Quest Logs\n\`\`\`\n${logStatus}\n\`\`\``));
     
@@ -157,7 +175,7 @@ function buildLink() {
 }
 
 export const questCmd = {
-    data: new SlashCommandBuilder().setName('quest').setDescription('Quest Solver - Orbie Style'),
+    data: new SlashCommandBuilder().setName('quest').setDescription('Quest Solver'),
     prefix: 'quest',
     
     async execute(interaction, client) {
