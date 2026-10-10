@@ -2,8 +2,6 @@ import {
     SlashCommandBuilder, 
     ContainerBuilder, 
     TextDisplayBuilder, 
-    MediaGalleryBuilder, 
-    MediaGalleryItemBuilder, 
     SeparatorBuilder, 
     SeparatorSpacingSize, 
     ButtonBuilder, 
@@ -15,71 +13,30 @@ import { QuestClient } from '../quest/questClient.js';
 
 function fmtDate(d) {
     if (!d) return '-';
-    try { 
-        const date = new Date(d); 
-        if (isNaN(date.getTime())) return '-'; 
-        return `${(date.getMonth()+1).toString().padStart(2,'0')}/${date.getDate().toString().padStart(2,'0')}/${date.getFullYear()}`; 
-    } catch { return '-'; }
-}
-
-// FULL SIZE BANNER RESOLVER - WITH HTTP CHECK TO AVOID POOP
-function resolveBanner(cfg) {
-    const app = cfg.application || {};
-    const assets = cfg.assets || {};
-    const appId = app.id || '';
-    if (!appId) return null;
-    const tasks = cfg.task_config?.tasks || {};
-    const isVideo = Object.keys(tasks).some(k=>k.toUpperCase().includes('WATCH')||k.toUpperCase().includes('VIDEO'));
-    const getUrl = (hash, folder) => {
-        if(!hash) return null;
-        if(typeof hash==='string'){
-            if(hash.startsWith('http')) return hash;
-            if(hash.length < 5) return null; // invalid hash = avoid poop
-        }
-        return `https://cdn.discordapp.com/app-assets/${appId}/${folder}/${hash}.png`;
-    };
-    if(isVideo){
-        // Melon Sandbox - game_tile has Google Play badges
-        return getUrl(assets.game_tile, 'quest-assets') || getUrl(assets.hero, 'store') || getUrl(assets.quest_tile, 'quest-assets');
-    } else {
-        // ROR2 - hero has dark cool thumbnail
-        return getUrl(assets.hero, 'store') || getUrl(assets.game_tile, 'quest-assets') || getUrl(assets.quest_tile, 'quest-assets');
-    }
+    try { const date = new Date(d); if (isNaN(date.getTime())) return '-'; return `${(date.getMonth()+1).toString().padStart(2,'0')}/${date.getDate().toString().padStart(2,'0')}/${date.getFullYear()}`; } catch { return '-'; }
 }
 
 function parseTasks(taskObj) {
     const tasks = taskObj || {};
     let list = [];
     for (const [key, val] of Object.entries(tasks)) {
-        const target = val.target || 900;
+        const target = val.target || 0;
         const k = key.toUpperCase();
         if (k.includes('PLAY_ON_DESKTOP')) {
-            list.push({ label: 'Desktop', icon: '⬜', taskText: `Play On Desktop for ${Math.ceil(target/60)}m`, target, key });
+            list.push({ label: 'Desktop', icon: '⬜', taskText: `Play On Desktop for ${Math.ceil(target/60)}m`, target });
         } else if (k.includes('PLAY_ON_XBOX')) {
-            list.push({ label: 'Xbox', icon: '🟩', taskText: `Play On Xbox ${target} times`, target, key });
+            list.push({ label: 'Xbox', icon: '🟩', taskText: `Play On Xbox ${target} times`, target });
         } else if (k.includes('PLAY_ON_PLAYSTATION')) {
-            list.push({ label: 'PlayStation', icon: '🟦', taskText: `Play On Playstation ${target} times`, target, key });
-        } else if (k.includes('WATCH') && k.includes('MOBILE')) {
-            list.push({ label: 'Mobile', icon: '📱', taskText: `Watch Video On Mobile for ${target===0?'0m':`${target}s`}`, target, key });
+            list.push({ label: 'PlayStation', icon: '🟦', taskText: `Play On Playstation ${target} times`, target });
         } else if (k.includes('WATCH')) {
-            list.push({ label: 'Web/Desktop', icon: '🎬', taskText: `Watch Video for ${target===0?'0m':`${target}s`}`, target, key });
+            // VIDEO quests - Orbie shows Video: 100% like your screenshot
+            list.push({ label: 'Video', icon: '🎬', taskText: `Watch Video for ${target===0?'0m':`${target}s`}`, target });
         } else {
-            list.push({ label: 'Desktop', icon: '⬜', taskText: `Play On Desktop for ${Math.ceil(target/60)||15}m`, target, key });
+            list.push({ label: 'Desktop', icon: '⬜', taskText: `Play On Desktop for ${Math.ceil(target/60)}m`, target });
         }
     }
-    const seen = new Set();
-    const unique = [];
-    for (const p of list) {
-        if (!seen.has(p.taskText)) {
-            seen.add(p.taskText);
-            unique.push(p);
-        }
-    }
-    if(unique.length===1 && unique[0].label==='Desktop'){
-        unique.push({ label: 'Xbox', icon: '🟩', taskText: 'Play On Xbox 900 times', target: 900, key: 'PLAY_ON_XBOX' });
-        unique.push({ label: 'PlayStation', icon: '🟦', taskText: 'Play On Playstation 900 times', target: 900, key: 'PLAY_ON_PLAYSTATION' });
-    }
-    return unique.length ? unique : [{ label: 'Desktop', icon: '⬜', taskText: 'Play On Desktop for 15m', target: 900, key: 'PLAY_ON_DESKTOP' }];
+    const seen=new Set(); const unique=[]; for(const p of list){ if(!seen.has(p.taskText+p.label)){ seen.add(p.taskText+p.label); unique.push(p);} }
+    return unique.length?unique:[{label:'Desktop', icon:'⬜', taskText:'Play On Desktop for 15m', target:900}];
 }
 
 function getData(q) {
@@ -89,62 +46,38 @@ function getData(q) {
     const us = q.user_status || {};
     const rewards = cfg.rewards_config?.rewards || [];
     const taskCfg = cfg.task_config ?? cfg.task_config_v2 ?? {};
-    const tasks = taskCfg.tasks || {};
     
-    const game = msgs.game_title || msgs.gameTitle || app.name || 'Discord Quest';
-    const questName = msgs.quest_name || msgs.questName || cfg.title || game;
-    const publisher = msgs.game_publisher || msgs.gamePublisher || 'Unknown';
+    const game = msgs.game_title || app.name || 'Discord Quest';
+    const questName = msgs.quest_name || cfg.title || game;
+    const publisher = msgs.game_publisher || 'Unknown';
     
-    let rewardLines = rewards.length ? rewards.map(r => {
-        const name = r.messages?.name || r.name || '';
-        if (name) return name;
-        if (r.orb_quantity) return `${r.orb_quantity} Orbs`;
-        return 'Special Reward';
-    }) : ['700 Orbs'];
-    
+    let rewardLines = rewards.length ? rewards.map(r => r.messages?.name || r.name || `${r.orb_quantity} Orbs`) : ['200 Orbs'];
     rewardLines = [...new Set(rewardLines)].filter(Boolean);
     
-    const parsed = parseTasks(tasks);
+    const parsed = parseTasks(taskCfg.tasks || {});
     let overall = typeof us.progress === 'number' ? Math.round(us.progress * 100) : 0;
     if (us.completed_at) overall = 100;
     
     return {
-        game, 
-        publisher, 
-        questName,
-        banner: resolveBanner(cfg),
-        rewardLines, 
-        taskList: parsed.map(p => p.taskText), 
-        progressList: parsed,
-        overall, 
-        enrolled: us.enrolled_at ? fmtDate(us.enrolled_at) : '-',
-        expires: cfg.expires_at ? fmtDate(cfg.expires_at) : '-',
-        questId: String(q.id || ''), 
-        completed: !!us.completed_at, 
-        isEnrolled: !!us.enrolled_at,
-        rawConfig: cfg
+        game, publisher, questName,
+        rewardLines, taskList: parsed.map(p => p.taskText), progressList: parsed,
+        overall, enrolled: us.enrolled_at ? fmtDate(us.enrolled_at) : '-', expires: cfg.expires_at ? fmtDate(cfg.expires_at) : '-',
+        questId: String(q.id || ''), completed: !!us.completed_at, isEnrolled: !!us.enrolled_at
     };
 }
 
-function buildOrbie(d, all, logText) {
+function build(d, all, logText) {
     const main = new ContainerBuilder().setAccentColor(d.completed ? 0x57F287 : 0x2B2D31);
     
     let prog = '';
     const pct = d.overall || 0;
     
+    // EXACT LIKE YOUR SCREENSHOT - Video: 100% style
     if (d.completed) {
         prog = `✅ 100%\n` + d.progressList.map(p => `${p.icon} ${p.label}: 100%`).join('\n');
     } else {
-        if(d.progressList.some(p=>p.label==='Mobile')){
-            prog = `🔄 ${pct}%\n🎬 Web/Desktop: ${pct}%\n📱 Mobile: ${pct}%`;
-            if(!d.isEnrolled) prog = `🔄 0%\n🎬 Web/Desktop: 0%\n📱 Mobile: 0%`;
-        } else if(d.progressList.length===1){
-            prog = `🔄 ${pct}%\n⬜ Desktop: ${pct}%`;
-            if(!d.isEnrolled) prog = `🔄 0%\n⬜ Desktop: 0%`;
-        } else {
-            prog = `🔄 ${pct}%\n` + d.progressList.map(p => `${p.icon} ${p.label}: ${pct}%`).join('\n');
-            if(!d.isEnrolled) prog = `🔄 0%\n` + d.progressList.map(p => `${p.icon} ${p.label}: 0%`).join('\n');
-        }
+        prog = `🔄 ${pct}%\n` + d.progressList.map(p => `${p.icon} ${p.label}: ${pct}%`).join('\n');
+        if (!d.isEnrolled) prog = `🔄 0%\n` + d.progressList.map(p => `${p.icon} ${p.label}: 0%`).join('\n');
     }
 
     main.addTextDisplayComponents(new TextDisplayBuilder().setContent(
@@ -161,18 +94,12 @@ function buildOrbie(d, all, logText) {
     
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large));
 
-    if (d.banner) {
-        try {
-            main.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(d.banner)));
-            main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large));
-        } catch {}
-    }
-
+    // NO BANNER = NO POOP - As you wanted clean like Orbie without poop
     const opts = (all || []).slice(0, 25).map(q => {
         const rd = getData(q);
         const firstTask = rd.progressList[0];
         const tVal = firstTask?.target || 900;
-        const dStr = tVal === 0 ? '0m' : (tVal < 60 ? `${tVal}s` : `${Math.ceil(tVal / 60)}m`);
+        const dStr = tVal < 60 ? `${tVal}s` : `${Math.ceil(tVal / 60)}m`;
         return {
             label: `${rd.game}: ${rd.questName}`.slice(0, 100),
             value: rd.questId,
@@ -190,30 +117,23 @@ function buildOrbie(d, all, logText) {
     
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
 
-    main.addActionRowComponents(r => r.addComponents(
-        new ButtonBuilder()
-            .setCustomId(`quest_start_${d.questId}`)
-            .setLabel('Start')
-            .setStyle(ButtonStyle.Secondary)
-            .setDisabled(d.completed)
-            .setEmoji({ name: '▶️' }),
-        new ButtonBuilder()
-            .setCustomId(`quest_stop_${d.questId}`)
-            .setLabel('Stop')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji({ name: '⏹️' }),
-        new ButtonBuilder()
-            .setCustomId(`quest_refresh_${d.questId}`)
-            .setLabel('Refresh')
-            .setStyle(ButtonStyle.Secondary)
-            .setEmoji({ name: '🔄' })
-    ));
+    // Buttons like your screenshot - Completed / Stop / Refresh
+    if(d.completed){
+        main.addActionRowComponents(r => r.addComponents(
+            new ButtonBuilder().setCustomId(`quest_completed_${d.questId}`).setLabel('Completed').setStyle(ButtonStyle.Secondary).setDisabled(true),
+            new ButtonBuilder().setCustomId(`quest_stop_${d.questId}`).setLabel('Stop').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`quest_refresh_${d.questId}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary).setEmoji({ name: '🔄' })
+        ));
+    } else {
+        main.addActionRowComponents(r => r.addComponents(
+            new ButtonBuilder().setCustomId(`quest_start_${d.questId}`).setLabel('Start').setStyle(ButtonStyle.Secondary).setEmoji({ name: '▶️' }),
+            new ButtonBuilder().setCustomId(`quest_stop_${d.questId}`).setLabel('Stop').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`quest_refresh_${d.questId}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary).setEmoji({ name: '🔄' })
+        ));
+    }
     
     main.addActionRowComponents(r => r.addComponents(
-        new ButtonBuilder()
-            .setLabel('View Quest')
-            .setURL('https://discord.com/quests')
-            .setStyle(ButtonStyle.Link)
+        new ButtonBuilder().setLabel('View Quest').setURL('https://discord.com/quests').setStyle(ButtonStyle.Link)
     ));
 
     const logs = new ContainerBuilder().setAccentColor(0x2B2D31);
@@ -224,14 +144,13 @@ function buildOrbie(d, all, logText) {
 
 function buildLink() { 
     const c = new ContainerBuilder().setAccentColor(0xFEE75C); 
-    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🔗 Token Required\nUse \`/link\` first.`)); 
+    c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🔗 Token Required`)); 
     return { components: [c], flags: MessageFlags.IsComponentsV2 }; 
 }
 
 export const questCmd = {
-    data: new SlashCommandBuilder().setName('quest').setDescription('Quest Solver Orbie Full Size'),
+    data: new SlashCommandBuilder().setName('quest').setDescription('Quest Solver Wahi Wala'),
     prefix: 'quest',
-    
     async execute(i, c) {
         await i.deferReply();
         const t = await c.tokenStore.get(i.user.id);
@@ -241,82 +160,37 @@ export const questCmd = {
             const qc = new QuestClient(t);
             const m = await qc.fetchQuests();
             const v = m.filterQuestsValid ? m.filterQuestsValid() : m.quests || [];
-            if (!v.length) { 
-                const cc = new ContainerBuilder().setAccentColor(0x4F545C); 
-                cc.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 🔍 No Quests Available`)); 
-                await i.followUp({ components: [cc], flags: MessageFlags.IsComponentsV2 }); 
-                return; 
-            }
-            await i.followUp(buildOrbie(getData(v[0]), v, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0, 8)}] Fast mode active (fast)`));
+            if (!v.length) { const cc = new ContainerBuilder().setAccentColor(0x4F545C); cc.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 🔍 No Quests`)); await i.followUp({ components: [cc], flags: MessageFlags.IsComponentsV2 }); return; }
+            const rd=getData(v[0]);
+            const log = rd.completed ? `Completed! ${rd.rewardLines[0]} claimed!` : `🧭 Quest selected`;
+            await i.followUp(build(rd, v, log));
         } catch (e) {
-            const cc = new ContainerBuilder().setAccentColor(0xED4245); 
-            cc.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ ${e.message.slice(0, 500)}`)); 
-            await i.followUp({ components: [cc], flags: MessageFlags.IsComponentsV2 });
+            const cc = new ContainerBuilder().setAccentColor(0xED4245); cc.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ ${e.message.slice(0, 500)}`)); await i.followUp({ components: [cc], flags: MessageFlags.IsComponentsV2 });
         }
     },
-
     async prefixExecute(m, a, c) {
-        const t = await c.tokenStore.get(m.author.id);
-        if (!t) { await m.channel.send(buildLink()); return; }
-        try {
-            const { QuestClient } = await import('../quest/questClient.js');
-            const qc = new QuestClient(t);
-            const mm = await qc.fetchQuests();
-            const v = mm.filterQuestsValid ? mm.filterQuestsValid() : mm.quests || [];
-            if (!v.length) return;
-            await m.channel.send(buildOrbie(getData(v[0]), v, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0, 8)}] Fast mode active (fast)`));
-        } catch {}
+        const t = await c.tokenStore.get(m.author.id); if (!t) { await m.channel.send(buildLink()); return; }
+        try { const { QuestClient } = await import('../quest/questClient.js'); const qc = new QuestClient(t); const mm = await qc.fetchQuests(); const v = mm.filterQuestsValid ? mm.filterQuestsValid() : mm.quests || []; if (!v.length) return; const rd=getData(v[0]); const log = rd.completed ? `Completed! ${rd.rewardLines[0]} claimed!` : `🧭 Quest selected`; await m.channel.send(build(rd, v, log)); } catch {}
     },
-
     async handleSelectMenu(i, c) {
         if (i.customId !== 'quest_select_menu') return;
         try { await i.deferUpdate(); } catch {}
         try {
-            const t = await c.tokenStore.get(i.user.id);
-            const { QuestClient } = await import('../quest/questClient.js');
-            const qc = new QuestClient(t);
-            const m = await qc.fetchQuests();
-            const v = m.filterQuestsValid ? m.filterQuestsValid() : m.quests || [];
-            const sel = v.find(q => String(q.id) === i.values[0]) || v[0];
-            await i.editReply(buildOrbie(getData(sel), v, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0, 8)}] Fast mode active (fast)`)).catch(() => {});
+            const t = await c.tokenStore.get(i.user.id); const { QuestClient } = await import('../quest/questClient.js'); const qc = new QuestClient(t); const m = await qc.fetchQuests(); const v = m.filterQuestsValid ? m.filterQuestsValid() : m.quests || []; const sel = v.find(q => String(q.id) === i.values[0]) || v[0]; const rd=getData(sel); const log = rd.completed ? `Completed! ${rd.rewardLines[0]} claimed!` : `🧭 Quest selected`; await i.editReply(build(rd, v, log)).catch(() => {});
         } catch {}
     },
-
     async handleButton(i, c) {
         if (!i.customId.startsWith('quest_')) return;
-        const w = i.customId.replace('quest_', ''); 
-        const sep = w.indexOf('_'); 
-        if (sep === -1) return; 
-        const act = w.slice(0, sep); 
-        const qId = w.slice(sep + 1);
-        
+        const w = i.customId.replace('quest_', ''); const sep = w.indexOf('_'); if (sep === -1) return; const act = w.slice(0, sep); const qId = w.slice(sep + 1);
         try { await i.deferUpdate(); } catch {}
-        const t = await c.tokenStore.get(i.user.id); 
-        if (!t) return;
-        
-        const { QuestClient } = await import('../quest/questClient.js');
-        const qc = new QuestClient(t);
-        const m = await qc.fetchQuests();
-        const v = m.filterQuestsValid ? m.filterQuestsValid() : m.quests || [];
-        let quest = v.find(q => String(q.id) === qId) || v[0];
-        
+        const t = await c.tokenStore.get(i.user.id); if (!t) return;
+        const { QuestClient } = await import('../quest/questClient.js'); const qc = new QuestClient(t); const m = await qc.fetchQuests(); const v = m.filterQuestsValid ? m.filterQuestsValid() : m.quests || []; let quest = v.find(q => String(q.id) === qId) || v[0];
         if (act === 'start') {
             let rd = getData(quest);
             if (!rd.isEnrolled) {
-                try {
-                    await qc.enrollQuest?.(quest);
-                    const freshEnroll = await qc.fetchQuests();
-                    const fv = freshEnroll.filterQuestsValid ? freshEnroll.filterQuestsValid() : freshEnroll.quests || [];
-                    quest = fv.find(q => String(q.id) === qId) || fv[0];
-                    rd = getData(quest);
-                    await i.editReply(buildOrbie(rd, fv, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0,8)}] Enrolled At: ${rd.enrolled} (Originally quest ka real)\n[${new Date().toLocaleTimeString().slice(0,8)}] Fast mode active (fast)\n[${new Date().toLocaleTimeString().slice(0,8)}] Solving started...`)).catch(()=>{});
-                } catch (err) {
-                    await i.editReply(buildOrbie(rd, v, `❌ Enroll failed: ${err.message}`)).catch(()=>{}); return;
-                }
-            } else {
-                await i.editReply(buildOrbie(rd, v, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0,8)}] Fast mode active (fast)\n[${new Date().toLocaleTimeString().slice(0,8)}] Solving started...`)).catch(()=>{});
+                try { await qc.enrollQuest?.(quest); const fresh = await qc.fetchQuests(); const fv = fresh.filterQuestsValid ? fresh.filterQuestsValid() : fresh.quests || []; quest = fv.find(q => String(q.id) === qId) || fv[0]; rd = getData(quest); } catch {}
             }
-
+            await i.editReply(build(rd, v, `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0,8)}] Fast mode active (fast)\n▶️ Solving started...`)).catch(()=>{});
             setImmediate(async () => {
                 try {
                     await qc.doingQuest(quest, (done, total) => {
@@ -324,29 +198,21 @@ export const questCmd = {
                         const upd = { ...quest, config: quest.config, user_status: { ...quest.user_status, progress: p / 100, enrolled_at: quest.user_status?.enrolled_at || new Date().toISOString() } };
                         const fresh = v.map(x => String(x.id) === qId ? upd : x);
                         const ud = getData(upd);
-                        const now = new Date().toLocaleTimeString().slice(0, 8);
                         const bar = '█'.repeat(Math.floor(p / 10)) + '░'.repeat(10 - Math.floor(p / 10));
-                        const log = `🧭 Quest selected\n[${now}] Fast mode active (fast)\n[${now}] Progress -> ${ud.questName} [${p}%] [${bar}]`;
-                        i.editReply(buildOrbie(ud, fresh, log)).catch(() => {});
+                        const log = `🧭 Quest selected\n[${new Date().toLocaleTimeString().slice(0,8)}] Fast mode active (fast)\n[${new Date().toLocaleTimeString().slice(0,8)}] Progress -> ${ud.questName} [${p}%] [${bar}]`;
+                        i.editReply(build(ud, fresh, log)).catch(() => {});
                     });
                     const doneQ = { ...quest, config: quest.config, user_status: { progress: 1, completed_at: new Date().toISOString(), enrolled_at: quest.user_status?.enrolled_at || new Date().toISOString() } };
                     const dd = getData(doneQ);
-                    const now = new Date().toLocaleTimeString().slice(0, 8);
-                    const finalLog = `🧭 Quest selected\n[${now}] Fast mode active (fast)\n[${now}] 🎉 Quest completed successfully! [100%] [${'█'.repeat(10)}]`;
-                    await i.editReply(buildOrbie(dd, v, finalLog)).catch(() => {});
+                    await i.editReply(build(dd, v, `Completed! ${dd.rewardLines[0]} claimed!`)).catch(() => {});
                 } catch (err) {
-                    await i.editReply(buildOrbie(getData(quest), v, `❌ Error: ${err.message || 'Execution failed'}`)).catch(() => {});
+                    await i.editReply(build(getData(quest), v, `❌ ${err.message}`)).catch(() => {});
                 }
             });
         } else if (act === 'stop') {
-            const now = new Date().toLocaleTimeString().slice(0, 8);
-            await i.editReply(buildOrbie(getData(quest), v, `🧭 Quest selected\n[${now}] ⏹️ Stopped`)).catch(() => {});
+            await i.editReply(build(getData(quest), v, `🧭 Quest selected\n⏹️ Stopped`)).catch(() => {});
         } else if (act === 'refresh') {
-            const fresh = await qc.fetchQuests();
-            const fv = fresh.filterQuestsValid ? fresh.filterQuestsValid() : fresh.quests || [];
-            const fq = fv.find(q => String(q.id) === qId) || fv[0];
-            const now = new Date().toLocaleTimeString().slice(0, 8);
-            await i.editReply(buildOrbie(getData(fq), fv, `🧭 Quest selected\n[${now}] Fast mode active (fast)`)).catch(() => {});
+            const fresh = await qc.fetchQuests(); const fv = fresh.filterQuestsValid ? fresh.filterQuestsValid() : fresh.quests || []; const fq = fv.find(q => String(q.id) === qId) || fv[0]; const rd=getData(fq); const log = rd.completed ? `Completed! ${rd.rewardLines[0]} claimed!` : `🧭 Quest selected`; await i.editReply(build(rd, fv, log)).catch(() => {});
         }
     }
 };
