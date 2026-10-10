@@ -14,19 +14,6 @@ import {
 import { QuestClient } from '../quest/questClient.js';
 import { disableAutoquest } from '../quest/autoquestStore.js';
 
-const activeRunners = new Map();
-
-// Task meta for detailed progress like Orbie
-const TASK_META = {
-    PLAY_ON_DESKTOP: { icon: '💻', label: 'Desktop', short: 'Desktop' },
-    PLAY_ON_XBOX: { icon: '❎', label: 'Xbox', short: 'Xbox' },
-    PLAY_ON_PLAYSTATION: { icon: '🎮', label: 'PlayStation', short: 'PlayStation' },
-    WATCH_VIDEO: { icon: '🎬', label: 'Watch Video', short: 'Video' },
-    STREAM_ON_DESKTOP: { icon: '📺', label: 'Stream', short: 'Stream' },
-    PLAY_ACTIVITY: { icon: '🎮', label: 'Play Activity', short: 'Activity' },
-    WATCH_VIDEO_ON_MOBILE: { icon: '📱', label: 'Mobile', short: 'Mobile' }
-};
-
 function fmtDate(d){
     try{
         const date = new Date(d);
@@ -35,7 +22,7 @@ function fmtDate(d){
     }catch{ return 'N/A'; }
 }
 
-function getFullData(q){
+function getData(q){
     const cfg = q.config || q;
     const msgs = cfg.messages || {};
     const app = cfg.application || {};
@@ -47,73 +34,65 @@ function getFullData(q){
     
     const game = msgs.game_title || msgs.gameTitle || app.name || 'Discord Quest';
     const questName = msgs.quest_name || msgs.questName || cfg.title || game;
-    const publisher = msgs.game_publisher || msgs.gamePublisher || 'Unknown';
+    const publisher = msgs.game_publisher || msgs.gamePublisher || 'Unknown Publisher';
     
     const appId = app.id || '';
     let banner = null;
-    let thumb = null;
-    // Orbie uses quest-assets - this is the big thumbnail
+    // ONLY use quest-assets - NEVER app-icons (poop fix)
     if(appId && assets.game_tile){
         banner = `https://cdn.discordapp.com/app-assets/${appId}/quest-assets/${assets.game_tile}.png`;
-        thumb = banner;
     } else if(appId && assets.quest_tile){
         banner = `https://cdn.discordapp.com/app-assets/${appId}/quest-assets/${assets.quest_tile}.png`;
-        thumb = banner;
     }
-    // fallback to app-icon
-    if(!banner && appId && app.icon && !app.icon.startsWith('http')){
-        banner = `https://cdn.discordapp.com/app-icons/${appId}/${app.icon}.png?size=512`;
-    }
+    // If no game_tile, NO banner - better than poop
     
-    // Rewards - full detail like Orbie
-    let rewardText = '700 Orbs 💠';
+    // REWARDS - CLEAN, NO DUPLICATE
     let rewardLines = [];
     if(rewards.length){
         rewardLines = rewards.map(r=>{
-            const name = r.messages?.name || r.name || 'Reward';
-            if(r.orb_quantity) return `${r.orb_quantity} Orbs - ${name}`;
-            if(r.messages?.name) return r.messages.name;
-            return name;
+            const name = r.messages?.name || r.name || '';
+            const orb = r.orb_quantity;
+            if(orb && name){
+                // If name already contains Orbs, don't duplicate
+                if(name.toLowerCase().includes('orb')) return name;
+                return `${name} (${orb} Orbs)`;
+            }
+            if(orb) return `${orb} Orbs`;
+            if(name) return name;
+            return 'Reward';
         });
-        const first = rewards[0];
-        if(first.orb_quantity) rewardText = `${first.orb_quantity} Orbs - ${first.messages?.name || ''}`.trim();
-        else rewardText = first.messages?.name || first.name || rewardText;
+    } else {
+        rewardLines = ['700 Orbs'];
     }
+    // Fix duplicate "700 Orbs - 700 Orbs"
+    rewardLines = rewardLines.map(r=> r.replace(/(\d+ Orbs)\s*-\s*\1/i, '$1').trim());
     
-    // Tasks - all platforms like Orbie: Desktop, Xbox, PlayStation with progress
+    // TASKS - ONLY real tasks, no fake Xbox 0%
     let taskList = [];
     let progressList = [];
     Object.entries(tasks).forEach(([key, t])=>{
-        const meta = TASK_META[key] || {icon:'⚙️', label:key, short:key};
         const target = t.target || 900;
-        let dur = '';
-        if(key.includes('PLAY') || key.includes('STREAM')){
-            if(target > 100){ // 900 times
-                dur = `${target} times`;
-            } else {
-                dur = `${Math.ceil(target/60)}m`;
-            }
-        } else {
-            dur = target < 60 ? `${target}s` : `${Math.ceil(target/60)}m`;
+        if(key === 'PLAY_ON_DESKTOP'){
+            taskList.push(`Play On Desktop for ${Math.ceil(target/60)}m`);
+            progressList.push({label:'Desktop', icon:'💻', progress: us.progress ? Math.round(us.progress*100):0});
+        } else if(key === 'PLAY_ON_XBOX'){
+            taskList.push(`Play On Xbox ${target} times`);
+            progressList.push({label:'Xbox', icon:'❎', progress: 0});
+        } else if(key === 'PLAY_ON_PLAYSTATION'){
+            taskList.push(`Play On Playstation ${target} times`);
+            progressList.push({label:'PlayStation', icon:'🎮', progress: 0});
+        } else if(key.includes('WATCH')){
+            const dur = target < 60 ? `${target}s` : `${Math.ceil(target/60)}m`;
+            taskList.push(`Watch Video for ${dur}`);
+            progressList.push({label:'Video', icon:'🎬', progress: us.progress ? Math.round(us.progress*100):0});
+        } else if(key.includes('STREAM')){
+            taskList.push(`Stream On Desktop for ${Math.ceil(target/60)}m`);
+            progressList.push({label:'Desktop', icon:'💻', progress: us.progress ? Math.round(us.progress*100):0});
         }
-        taskList.push(`Play On ${meta.short} for ${dur}`.replace('Play On Play On','Play On').replace('Play On Watch','Watch'));
-        // For Orbie style, actually use original label
-        if(key === 'PLAY_ON_DESKTOP') taskList[taskList.length-1] = `Play On Desktop for ${Math.ceil(target/60)}m`;
-        else if(key === 'PLAY_ON_XBOX') taskList[taskList.length-1] = `Play On Xbox ${target} times`;
-        else if(key === 'PLAY_ON_PLAYSTATION') taskList[taskList.length-1] = `Play On Playstation ${target} times`;
-        else if(key.includes('WATCH')) taskList[taskList.length-1] = `${meta.label} for ${dur}`;
-        else taskList[taskList.length-1] = `${meta.label} for ${dur}`;
-        
-        // Progress per platform
-        let prog = 0;
-        if(us.progress !== undefined) prog = Math.round(us.progress*100);
-        if(us.completed_at) prog = 100;
-        // Try to get platform specific progress if available
-        progressList.push({key, label: meta.short, icon: meta.icon, progress: prog, target});
     });
     if(taskList.length===0){
         taskList = ['Play On Desktop for 15m'];
-        progressList = [{key:'PLAY_ON_DESKTOP', label:'Desktop', icon:'💻', progress: us.progress ? Math.round(us.progress*100):0, target:900}];
+        progressList = [{label:'Desktop', icon:'💻', progress: us.progress ? Math.round(us.progress*100):0}];
     }
     
     let overallProgress = 0;
@@ -129,86 +108,81 @@ function getFullData(q){
         publisher: publisher.slice(0,80),
         questName: questName.slice(0,80),
         banner,
-        thumb,
-        rewardText,
         rewardLines,
         taskList,
         progressList,
         overallProgress,
         enrolled: fmtDate(enrolled),
         expires: fmtDate(expires),
-        expiresRaw: expires,
         questId: String(q.id || cfg.id || ''),
-        isActive,
-        appId
+        isActive
     };
 }
 
-function buildOrbieStyle(quest, allQuests, log){
-    const d = getFullData(quest);
+function buildClean(quest, allQuests, logText){
+    const d = getData(quest);
     
-    const main = new ContainerBuilder().setAccentColor(d.isActive?0x5865F2:0x57F287);
+    const main = new ContainerBuilder().setAccentColor(0x5865F2);
     
-    // Title like Orbie
+    // CLEAN - No AUTO-TRACKING, just Quest Solver like Orbie
+    const progressLines = d.progressList.map(p=>{
+        if(d.overallProgress >= 100) return `✅ ${p.progress}%`;
+        return `${p.icon} **${p.label}:** ${d.overallProgress}%`;
+    }).join('\n');
+    
+    // For completed - show like Orbie screenshot
+    let progDisplay = progressLines;
+    if(d.overallProgress >= 100 && d.progressList.length > 1){
+        progDisplay = `✅ 100%\n` + d.progressList.map(p=>{
+            if(p.label==='Desktop') return `⬜ Desktop: 100%`;
+            if(p.label==='Xbox') return `🟩 Xbox: 100%`;
+            if(p.label==='PlayStation') return `🟦 PlayStation: 100%`;
+            return `${p.icon} ${p.label}: 100%`;
+        }).join('\n');
+    } else if(d.overallProgress < 100 && d.progressList.length === 1){
+        // Single platform - simple like your screenshot should be
+        progDisplay = `${d.progressList[0].icon} **${d.progressList[0].label}:** ${d.overallProgress}%`;
+    }
+    
     main.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        `## ${d.isActive ? '🛡️ Quest Solver • AUTO-TRACKING' : '✅ Quest Solver • COMPLETED'}\n\n`+
+        `## 🌀 Quest Solver\n\n`+
         `• **Game:** ${d.game}\n`+
         `• **Publisher:** ${d.publisher}\n`+
         `• **Quest Name:** ${d.questName}\n`+
         `• **Enrolled At:** ${d.enrolled}\n`+
         `• **Expires At:** ${d.expires}\n`+
-        `• **Progress:**\n`+
-        d.progressList.map(p=>{
-            const icon = p.progress>=100 ? '✅' : (p.label==='Desktop'?'⬜': p.label==='Xbox'?'🟩':'🟦');
-            // Use check for completed like Orbie screenshot
-            if(d.overallProgress>=100){
-                return `${icon} ${p.progress}%`;
-            } else {
-                return `${p.icon} **${p.label}:** ${p.progress}%`;
-            }
-        }).join('\n') + (d.progressList.length===1 ? '' : '') +
-        // Orbie style for 100%
-        (d.overallProgress>=100 ? `\n✅ 100%\n⬜ Desktop: 100%\n🟩 Xbox: 100%\n🟦 PlayStation: 100%` : '') +
-        `\n\n### Rewards:\n`+
-        `• ${d.rewardLines[0] || d.rewardText}\n\n`+
+        `• **Progress:**\n${progDisplay}\n\n`+
+        `### Rewards:\n`+
+        d.rewardLines.map(r=>`• ${r}`).join('\n') + `\n\n`+
         `### Tasks:\n`+
         d.taskList.map(t=>`• ${t}`).join('\n')
     ));
     
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large));
     
-    // Big thumbnail like Orbie screenshot - always show if available
-    if(d.thumb){
+    // BANNER - Only if real quest-assets exists, else HIDE (no poop)
+    if(d.banner){
         try{
-            main.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(d.thumb)));
+            main.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(d.banner)));
             main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large));
-        }catch{}
+        }catch{
+            // If banner fails, don't show anything - no poop
+        }
     }
     
-    // Dropdown - multiple quests with correct orb counts like second screenshot
+    // DROPDOWN - Clean
     const options = (allQuests||[quest]).slice(0,25).map(q=>{
-        const rd = getFullData(q);
-        const dur = rd.progressList[0]?.target || 900;
-        const durStr = dur > 100 ? `${dur>60?Math.ceil(dur/60)+'m':dur+'s'}` : (dur<60?`${dur}s`:`${Math.ceil(dur/60)}m`);
-        // Fix: if target is 900 times, show 15m for dropdown simplicity, but use actual
-        let dStr = durStr;
-        if(rd.taskList[0]?.includes('900 times')) dStr = '15m';
-        if(rd.taskList[0]?.includes('m')){ const m = rd.taskList[0].match(/(\d+)m/); if(m) dStr = `${m[1]}m`; }
-        if(rd.taskList[0]?.includes('s')){ const m = rd.taskList[0].match(/(\d+)s/); if(m) dStr = `${m[1]}s`; }
-        // Actually parse from task
-        const t = (q.config?.task_config?.tasks || q.config?.task_config_v2?.tasks || {});
-        const firstTask = Object.values(t)[0];
-        if(firstTask){
-            const tg = firstTask.target;
-            if(tg < 60) dStr = `${tg}s`;
-            else if(tg < 100) dStr = `${Math.ceil(tg/60)}m`;
-            else dStr = '15m';
-        }
-        const status = rd.isActive ? (rd.overallProgress>0?'🟡':'🟢') : '✅';
+        const rd = getData(q);
+        const firstTask = (q.config?.task_config?.tasks || q.config?.task_config_v2?.tasks || {});
+        const tVal = Object.values(firstTask)[0]?.target || 900;
+        const dStr = tVal < 60 ? `${tVal}s` : `${Math.ceil(tVal/60)}m`;
+        const status = rd.isActive ? '🟢' : '✅';
+        // Clean description - no duplicate
+        const rewardShort = rd.rewardLines[0]?.split(' (')[0] || rd.rewardLines[0] || 'Reward';
         return {
             label: `${rd.game}: ${rd.questName}`.slice(0,100),
             value: rd.questId,
-            description: `${rd.rewardLines[0]?.split(' - ')[0] || rd.rewardText} | ${dStr} | ${rd.overallProgress}%`.slice(0,100),
+            description: `${rewardShort} | ${dStr} | ${rd.overallProgress}%`.slice(0,100),
             default: rd.questId===d.questId
         };
     });
@@ -219,14 +193,14 @@ function buildOrbieStyle(quest, allQuests, log){
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
     
     main.addActionRowComponents(r=>r.addComponents(
-        new ButtonBuilder().setCustomId(`quest_start_${d.questId}`).setLabel(d.isActive ? (d.overallProgress>0?'Resume':'Start') : 'Completed').setStyle(d.isActive?ButtonStyle.Primary:ButtonStyle.Secondary).setDisabled(!d.isActive),
+        new ButtonBuilder().setCustomId(`quest_start_${d.questId}`).setLabel(d.isActive ? 'Start' : 'Completed').setStyle(d.isActive?ButtonStyle.Primary:ButtonStyle.Secondary).setDisabled(!d.isActive),
         new ButtonBuilder().setCustomId(`quest_stop_${d.questId}`).setLabel('Stop').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`quest_refresh_${d.questId}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary).setEmoji({name:'🔄'})
     ));
     main.addActionRowComponents(r=>r.addComponents(new ButtonBuilder().setLabel('View Quest').setURL('https://discord.com/quests').setStyle(ButtonStyle.Link)));
     
     const logs = new ContainerBuilder().setAccentColor(0x2B2D31);
-    logs.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 📦 Quest Logs\n\`\`\`\n${log}\n\`\`\``));
+    logs.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 📦 Quest Logs\n\`\`\`\n${logText}\n\`\`\``));
     
     return {components:[main, logs], flags: MessageFlags.IsComponentsV2};
 }
@@ -234,7 +208,7 @@ function buildOrbieStyle(quest, allQuests, log){
 function buildLink(){ const c=new ContainerBuilder().setAccentColor(0xFEE75C); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## 🔗 Token Required\nUse /link`)); return {components:[c], flags: MessageFlags.IsComponentsV2}; }
 
 export const questCmd={
-    data:new SlashCommandBuilder().setName('quest').setDescription('Quest Solver ORBIE STYLE'),
+    data:new SlashCommandBuilder().setName('quest').setDescription('Quest Solver - Clean Orbie Clone'),
     prefix:'quest',
     async execute(interaction, client){
         await interaction.deferReply();
@@ -245,7 +219,7 @@ export const questCmd={
             const mgr=await qc.fetchQuests();
             const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||[]);
             if(!valid.length){ const c=new ContainerBuilder().setAccentColor(0x4F545C); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 🔍 No Quests`)); await interaction.followUp({components:[c], flags: MessageFlags.IsComponentsV2}); return; }
-            await interaction.followUp(buildOrbieStyle(valid[0], valid, 'Quest loaded • Orbie style • Thumbnail ready'));
+            await interaction.followUp(buildClean(valid[0], valid, 'Quest loaded • Clean Orbie style • No fake'));
         }catch(e){
             if(e.message?.includes('401')){ client.tokenStore.remove(interaction.user.id); disableAutoquest(interaction.user.id); const c=new ContainerBuilder().setAccentColor(0xED4245); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`# ❌ Token Expired`)); await interaction.followUp({components:[c], flags: MessageFlags.IsComponentsV2}); }
             else{ const c=new ContainerBuilder().setAccentColor(0xED4245); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ ${e.message.slice(0,800)}`)); await interaction.followUp({components:[c], flags: MessageFlags.IsComponentsV2}); }
@@ -259,7 +233,7 @@ export const questCmd={
             const mgr=await qc.fetchQuests();
             const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||[]);
             if(!valid.length) return;
-            await message.channel.send(buildOrbieStyle(valid[0], valid, 'Quest loaded • Orbie style'));
+            await message.channel.send(buildClean(valid[0], valid, 'Quest loaded • Clean'));
         }catch(e){ console.error(e); }
     },
     async handleSelectMenu(interaction, client){
@@ -271,8 +245,7 @@ export const questCmd={
             const mgr=await qc.fetchQuests();
             const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||[]);
             const sel=valid.find(q=>String(q.id)===interaction.values[0])||valid[0];
-            const rd=getFullData(sel);
-            await interaction.editReply(buildOrbieStyle(sel, valid, `Switched to ${rd.questName} • ${rd.rewardText}`)).catch(()=>{});
+            await interaction.editReply(buildClean(sel, valid, `Quest selected: ${getData(sel).questName}`)).catch(()=>{});
         }catch(e){ console.error(e); }
     },
     async handleButton(interaction, client){
@@ -291,8 +264,8 @@ export const questCmd={
         const quest=valid.find(q=>String(q.id)===qId)||valid[0];
         
         if(action==='start'){
-            const rd=getFullData(quest);
-            await interaction.editReply(buildOrbieStyle(quest, valid, `▶️ Starting ${rd.questName}...`)).catch(()=>{});
+            const rd=getData(quest);
+            await interaction.editReply(buildClean(quest, valid, `Starting ${rd.questName}...`)).catch(()=>{});
             setImmediate(async()=>{
                 try{
                     try{ await qc.enrollQuest?.(quest); }catch{}
@@ -300,19 +273,19 @@ export const questCmd={
                         const p=Math.round(done/total*100);
                         const updated={...quest, config:quest.config, user_status:{...quest.user_status, progress:p/100}};
                         const fresh=valid.map(x=>String(x.id)===qId?updated:x);
-                        interaction.editReply(buildOrbieStyle(updated, fresh, `▶️ Tracking ${p}% • ${rd.game}`)).catch(()=>{});
+                        interaction.editReply(buildClean(updated, fresh, `Progress: ${p}% • ${rd.game}`)).catch(()=>{});
                     });
                     const doneQ={...quest, config:quest.config, user_status:{progress:1, completed_at:new Date().toISOString()}};
-                    await interaction.editReply(buildOrbieStyle(doneQ, valid, `✅ Completed! ${getFullData(doneQ).rewardText} claimed!`)).catch(()=>{});
-                }catch(err){ await interaction.editReply(buildOrbieStyle(quest, valid, `❌ ${err.message}`)).catch(()=>{}); }
+                    await interaction.editReply(buildClean(doneQ, valid, `Completed! ${getData(doneQ).rewardLines[0]} claimed!`)).catch(()=>{});
+                }catch(err){ await interaction.editReply(buildClean(quest, valid, `Error: ${err.message}`)).catch(()=>{}); }
             });
         }else if(action==='stop'){
-            await interaction.editReply(buildOrbieStyle(quest, valid, '⏹️ Stopped')).catch(()=>{});
+            await interaction.editReply(buildClean(quest, valid, 'Stopped')).catch(()=>{});
         }else if(action==='refresh'){
             const fresh=await qc.fetchQuests();
             const fValid=fresh.filterQuestsValid?fresh.filterQuestsValid():(fresh.quests||[]);
             const fQuest=fValid.find(q=>String(q.id)===qId)||fValid[0];
-            await interaction.editReply(buildOrbieStyle(fQuest, fValid, `🔄 Refreshed ${getFullData(fQuest).overallProgress}%`)).catch(()=>{});
+            await interaction.editReply(buildClean(fQuest, fValid, `Refreshed: ${getData(fQuest).overallProgress}%`)).catch(()=>{});
         }
     }
 };
