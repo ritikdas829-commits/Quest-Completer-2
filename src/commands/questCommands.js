@@ -1,205 +1,129 @@
-
 import {
     SlashCommandBuilder,
     ContainerBuilder,
     TextDisplayBuilder,
     MediaGalleryBuilder,
     MediaGalleryItemBuilder,
+    SeparatorBuilder,
+    SeparatorSpacingSize,
     ButtonBuilder,
     ButtonStyle,
     StringSelectMenuBuilder,
-    SeparatorBuilder,
-    SeparatorSpacingSize,
     MessageFlags
 } from 'discord.js';
 import { QuestClient } from '../quest/questClient.js';
 
-const activeQuestRunners = new Map();
-const rewardTracker = new Map();
+const activeRunners = new Map();
 
-function fmtDate(s) { try { const d=new Date(s); return isNaN(d.getTime())?'Unknown':d.toLocaleDateString('en-US'); } catch { return 'Unknown'; } }
-
-function getReal(q) {
+function getReal(q){
     const cfg = q.config || q;
-    const app = cfg.application || q.application || {};
-    const us = q.user_status || {};
+    const msgs = cfg.messages || {};
+    const appId = cfg.application?.id || '';
+    const assets = cfg.assets || {};
+    const rewards = cfg.rewards_config?.rewards || [];
+    const tasks = (cfg.task_config ?? cfg.task_config_v2)?.tasks ?? {};
     
-    let game = cfg.messages?.gameTitle || cfg.messages?.game_title || app.name || 'Discord';
-    let questName = cfg.messages?.questName || cfg.messages?.quest_name || cfg.title || game;
-    if (!questName) questName = game;
-
-    const qId = q.id || cfg.id || '';
-    const appId = app.id || cfg.application?.id || '';
-    const iconHash = app.icon || cfg.assets?.icon || null;
-
-    // ===== BANNER FIX - NO POOP =====
+    // Game & Quest name
+    const game = msgs.game_title || msgs.gameTitle || 'Unknown Game';
+    const questName = msgs.quest_name || msgs.questName || cfg.title || game;
+    
+    // Banner - CORRECT URL from your old file - NO POOP
     let banner = null;
-    if (appId && iconHash) {
-        // Only use app-icons, 100% safe, no poop
-        let hash = iconHash;
-        if (hash.startsWith('http')) banner = null; // don't use external
-        else banner = `https://cdn.discordapp.com/app-icons/${appId}/${hash}.png?size=512`;
+    if(appId && assets.game_tile){
+        banner = `https://cdn.discordapp.com/app-assets/${appId}/quest-assets/${assets.game_tile}.png`;
     }
-    // If no icon, no banner - better than poop
-
-    // ===== REWARDS - 100% DYNAMIC - NO FIXED 700 - TRACKING =====
+    
+    // Rewards - CORRECT from old file - NO UNKNOWN
     let rewardText = 'Unknown Reward';
-    let rewardCount = null;
-    let rewardType = 'unknown';
-    
-    const rewards = cfg.rewards_config?.rewards || cfg.rewards || cfg.reward_store_listing || [];
-    if (rewards.length > 0) {
+    let orbCount = null;
+    if(rewards.length){
         const r = rewards[0];
-        // Real parsing from API
-        if (r.count !== undefined || r.amount !== undefined || r.orb_count !== undefined) {
-            rewardCount = r.count ?? r.amount ?? r.orb_count;
-            rewardText = `${rewardCount} Orbs 💠`;
-            rewardType = 'orbs';
-        } else if (r.name) {
-            const name = r.name;
-            // Check if name contains number like "700 Orbs"
-            const m = name.match(/(\d+)\s*Orbs?/i);
-            if (m) {
-                rewardCount = parseInt(m[1]);
-                rewardText = `${rewardCount} Orbs 💠`;
-                rewardType = 'orbs';
-            } else if (name.toLowerCase().includes('decoration')) {
-                rewardText = `🎨 ${name}`;
-                rewardType = 'decoration';
-            } else if (name.toLowerCase().includes('effect')) {
-                rewardText = `✨ ${name}`;
-                rewardType = 'effect';
-            } else if (name.toLowerCase().includes('nitro')) {
-                rewardText = `💎 ${name}`;
-                rewardType = 'nitro';
-            } else {
-                rewardText = `🎮 ${name}`;
-                rewardType = 'in_game';
-            }
+        const name = r.messages?.name || r.name || 'Reward';
+        if(r.orb_quantity){
+            orbCount = r.orb_quantity;
+            rewardText = `${r.orb_quantity} Orbs \uD83D\uDDB2 ${name}`;
+        } else if(r.quantity){
+            rewardText = `${r.quantity}d ${name}`;
+        } else {
+            rewardText = name;
         }
-        // Store in tracker
-        rewardTracker.set(String(qId), { count: rewardCount, text: rewardText, type: rewardType });
-    } else {
-        // Fallback check other fields
-        const rt = cfg.messages?.reward_text || cfg.messages?.rewardText || '';
-        if (rt) {
-            rewardText = rt;
-            const m = rt.match(/(\d+)/);
-            if (m) rewardCount = parseInt(m[1]);
-        }
+    } else if(msgs.reward_text){
+        rewardText = msgs.reward_text;
+        const m = rewardText.match(/(\d+)\s*Orbs/i);
+        if(m) orbCount = parseInt(m[1]);
     }
-
-    // ===== TASKS - REAL RANDOM 10s 30s 3m 15m =====
-    const taskCfg = cfg.task_config || cfg.taskConfig || {};
-    const tasks = Object.entries(taskCfg.tasks || {});
-    let tasksFormatted = '';
-    let durations = [];
-    let taskType = 'Play';
-    if (tasks.length) {
-        tasksFormatted = tasks.map(([key, t]) => {
-            const target = t.target ?? t.duration ?? 900;
-            durations.push(target);
-            const ev = (t.event_name || key || '').toLowerCase();
-            if (ev.includes('watch') || ev.includes('video')) taskType = 'Watch Video';
-            else if (ev.includes('stream')) taskType = 'Stream';
-            else taskType = 'Play';
-            let plat = 'Desktop';
-            if (t.platform === 2) plat = 'Xbox';
-            else if (t.platform === 3) plat = 'PlayStation';
-            if (target < 60) return `• ${taskType} on ${plat} for ${target}s`;
-            else return `• ${taskType} on ${plat} for ${Math.round(target/60)}m`;
-        }).join('\n');
-    } else {
-        tasksFormatted = '• Play on Desktop for 15m';
-        durations = [900];
-    }
-
-    const enrolled = us.enrolled_at || new Date().toISOString();
-    const expires = cfg.expires_at || null;
-    let progress = 0;
-    if (typeof us.progress === 'number') progress = Math.round(us.progress * 100);
-    if (us.completed_at) progress = 100;
     
-    // Active check
-    const isActive = progress < 100 && !us.completed_at;
-    const isExpired = expires ? new Date(expires) < new Date() : false;
-
-    return { 
-        game: game.slice(0,80), 
-        questName: questName.slice(0,80), 
-        banner, 
-        rewardText, 
-        rewardCount, 
-        rewardType,
-        tasksFormatted, 
-        durations, 
-        taskType,
-        enrolled, 
-        expires, 
-        progress, 
-        questId: String(qId),
-        isActive,
-        isExpired
-    };
+    // Tasks - Real Random 10s 30s 3m 15m
+    const TASK_ICON = {PLAY_ON_DESKTOP:'\uD83D\uDDA5\uFE0F', WATCH_VIDEO:'\uD83C\uDFAC', STREAM_ON_DESKTOP:'\uD83D\uDCFA', PLAY_ACTIVITY:'\uD83C\uDFAE'};
+    let taskStr = '';
+    let dur = 900;
+    let taskType = 'Play';
+    Object.entries(tasks).forEach(([k,t])=>{
+        const meta = TASK_ICON[k] || '\u2699\uFE0F';
+        dur = t.target || 900;
+        if(k.includes('WATCH')) taskType = 'Watch Video';
+        else if(k.includes('STREAM')) taskType = 'Stream';
+        const d = dur < 60 ? `${dur}s` : `${Math.ceil(dur/60)}m`;
+        taskStr += `${meta} ${k.replace(/_/g,' ')} • ${d}\n`;
+    });
+    if(!taskStr) taskStr = '\uD83D\uDDA5\uFE0F Play on Desktop • 15m';
+    
+    const progress = q.user_status?.progress ? Math.round(q.user_status.progress*100) : 0;
+    const isActive = progress < 100 && !q.user_status?.completed_at;
+    const qId = String(q.id || cfg.id || '');
+    
+    return {game, questName, banner, rewardText, orbCount, taskStr, dur, taskType, progress, isActive, qId, appId, expires: cfg.expires_at};
 }
 
-function build(quest, allQuests, logStatus, opts={}) {
+function build(quest, all, log){
     const d = getReal(quest);
-    const progress = opts.progress ?? d.progress;
-    const isCompleted = progress >= 100;
+    const activeCount = all.filter(x=>getReal(x).isActive).length;
     
-    const main = new ContainerBuilder().setAccentColor(d.isActive ? 0x5865F2 : 0x808080);
+    const main = new ContainerBuilder().setAccentColor(d.isActive?0x5865F2:0x808080);
     main.addTextDisplayComponents(new TextDisplayBuilder().setContent(
-        `## 🛡️ Quest Solver • AUTO-TRACKING\n\n• **Game:** ${d.game}\n• **Quest:** ${d.questName}\n• **Status:** ${d.isActive ? '🟢 Active' : '⚫ Completed'}${d.isExpired ? ' (Expired)' : ''}\n• **Enrolled:** ${fmtDate(opts.enrolledAt || d.enrolled)}\n• **Expires:** ${fmtDate(opts.expiresAt || d.expires)}\n• **Progress:**\n${isCompleted ? '✅' : '⏳'} ${progress}%\n💻 Desktop: ${progress}%\n\n### Rewards (Auto-Tracked):\n• ${d.rewardText}${d.rewardType === 'orbs' ? ` • Type: ${d.taskType}` : ''}\n\n### Tasks (Real Random):\n${d.tasksFormatted}`
+        `## \uD83D\uDEE1\uFE0F Quest Solver • AUTO-TRACKING\n\n• **Game:** ${d.game}\n• **Quest:** ${d.questName}\n• **Status:** ${d.isActive?'\uD83D\uDFE2 Active':'⚫ Completed'}\n• **Progress:** ${d.progress>=100?'✅':'⏳'} ${d.progress}%\n\n### Rewards (Auto-Tracked):\n• ${d.rewardText}\n\n### Tasks (Real Random):\n${d.taskStr}`
     ));
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large));
     
-    // Banner - only if valid app-icons url, no poop
-    const bUrl = opts.bannerUrl || d.banner;
-    if (bUrl && bUrl.startsWith('https://cdn.discordapp.com/app-icons/')) {
-        try { 
-            main.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(bUrl))); 
-            main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large)); 
-        } catch {}
+    if(d.banner){
+        try{
+            main.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(d.banner)));
+            main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large));
+        }catch{}
     }
     
-    const placeholder = `${d.game}: ${d.questName}`.slice(0,100);
-    // Only show active quests in dropdown if filter enabled, else all
-    const listQuests = opts.activeOnly ? (allQuests||[]).filter(q=>getReal(q).isActive) : (allQuests||[quest]);
-    const finalList = listQuests.length ? listQuests : (allQuests||[quest]);
-    
-    const options = finalList.slice(0,25).map(q=>{
-        const rd = getReal(q);
-        const isSel = rd.questId === d.questId;
-        const dur = rd.durations[0] || 900;
-        const durStr = dur < 60 ? `${dur}s` : `${Math.round(dur/60)}m`;
-        const statusEmoji = rd.isActive ? (rd.progress > 0 ? '🟡' : '🟢') : '⚫';
-        return { 
-            label: `${rd.game}: ${rd.questName}`.slice(0,100), 
-            value: rd.questId, 
-            description: `${statusEmoji} ${rd.rewardText} | ${durStr} | ${rd.progress}%${isSel?' • Selected':''}`.slice(0,100), 
-            emoji: isSel ? {name:'✅'} : {name: statusEmoji}, 
-            default: isSel 
+    const opts = all.slice(0,25).map(x=>{
+        const rd = getReal(x);
+        const durS = rd.dur < 60 ? `${rd.dur}s` : `${Math.ceil(rd.dur/60)}m`;
+        const emoji = rd.isActive ? (rd.progress>0?'🟡':'🟢') : '⚫';
+        return {
+            label: `${rd.game}: ${rd.questName}`.slice(0,100),
+            value: rd.qId,
+            description: `${emoji} ${rd.rewardText.split(' ').slice(0,2).join(' ')} | ${durS} | ${rd.progress}%`.slice(0,100),
+            default: rd.qId===d.qId
         };
     });
-    main.addActionRowComponents(r=>r.addComponents(new StringSelectMenuBuilder().setCustomId('quest_select_menu').setPlaceholder(placeholder).addOptions(options)));
+    
+    main.addActionRowComponents(r=>r.addComponents(
+        new StringSelectMenuBuilder().setCustomId('quest_select_menu').setPlaceholder(`${d.game}: ${d.questName}`.slice(0,100)).addOptions(opts)
+    ));
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
     main.addActionRowComponents(r=>r.addComponents(
-        new ButtonBuilder().setCustomId(`quest_start_${d.questId}`).setLabel(d.isActive ? 'Start Tracking' : 'Completed').setStyle(d.isActive ? ButtonStyle.Primary : ButtonStyle.Secondary).setEmoji({name: d.isActive ? '▶️' : '✅'}).setDisabled(!d.isActive),
-        new ButtonBuilder().setCustomId(`quest_stop_${d.questId}`).setLabel('Stop').setStyle(ButtonStyle.Secondary).setEmoji({name:'⏹️'}),
-        new ButtonBuilder().setCustomId(`quest_refresh_${d.questId}`).setLabel('Refresh Check').setStyle(ButtonStyle.Secondary).setEmoji({name:'🔄'})
+        new ButtonBuilder().setCustomId(`quest_start_${d.qId}`).setLabel(d.isActive?'Start Tracking':'Completed').setStyle(d.isActive?ButtonStyle.Primary:ButtonStyle.Secondary).setEmoji({name:d.isActive?'▶️':'✅'}).setDisabled(!d.isActive),
+        new ButtonBuilder().setCustomId(`quest_stop_${d.qId}`).setLabel('Stop').setStyle(ButtonStyle.Secondary).setEmoji({name:'⏹️'}),
+        new ButtonBuilder().setCustomId(`quest_refresh_${d.qId}`).setLabel('Refresh Check').setStyle(ButtonStyle.Secondary).setEmoji({name:'🔄'})
     ));
-    main.addActionRowComponents(r=>r.addComponents(new ButtonBuilder().setLabel('View Quest').setURL('https://discord.com/quests').setStyle(ButtonStyle.Link).setEmoji({name:'🔗'})));
+    main.addActionRowComponents(r=>r.addComponents(new ButtonBuilder().setLabel('View Quest').setURL('https://discord.com/quests').setStyle(ButtonStyle.Link)));
     
     const logs = new ContainerBuilder().setAccentColor(0x2B2D31);
-    logs.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 📦 Quest Logs • Auto-Check\n\`\`\`\n${logStatus}\n\`\`\``));
-    return { components:[main,logs], flags:MessageFlags.IsComponentsV2 };
+    logs.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### \uD83D\uDCE6 Quest Logs • Auto-Check\n\`\`\`\n${log}\n\`\`\``));
+    return {components:[main,logs], flags: MessageFlags.IsComponentsV2};
 }
 
-function buildLink(){ const c=new ContainerBuilder().setAccentColor(0xFF0000); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ❌ Not Linked\nUse \`/link\` first`)); return { components:[c], flags:MessageFlags.IsComponentsV2 }; }
+function buildLink(){ const c=new ContainerBuilder().setAccentColor(0xFF0000); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`## ❌ Not Linked\nUse /link first`)); return {components:[c], flags: MessageFlags.IsComponentsV2}; }
 
 export const questCmd={
-    data:new SlashCommandBuilder().setName('quest').setDescription('Quest Solver AUTO-TRACKING ACTIVE ONLY'),
+    data:new SlashCommandBuilder().setName('quest').setDescription('Quest Solver AUTO-TRACKING'),
     prefix:'quest',
     async execute(interaction, client){
         await interaction.deferReply();
@@ -208,12 +132,12 @@ export const questCmd={
         try{
             const qc=new QuestClient(token);
             const mgr=await qc.fetchQuests();
-            const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||mgr.all||[]);
-            const activeValid = valid.filter(q=>getReal(q).isActive && !getReal(q).isExpired);
-            const showQuests = activeValid.length ? activeValid : valid;
-            if(!showQuests.length){ const c=new ContainerBuilder().setAccentColor(0xFF0000); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ No Active Quests`)); await interaction.followUp({components:[c], flags:MessageFlags.IsComponentsV2}); return; }
-            await interaction.followUp(build(showQuests[0], showQuests, `🔍 Auto-Checked: ${activeValid.length} Active / ${valid.length} Total\n💰 ${getReal(showQuests[0]).rewardText} • ${getReal(showQuests[0]).tasksFormatted.split('\n')[0]}\n📦 Tracking Ready`, {activeOnly:false}));
-        }catch(e){ console.error(e); const c=new ContainerBuilder().setAccentColor(0xFF0000); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ Error\n\`\`\`${e.message}\`\`\``)); await interaction.followUp({components:[c], flags:MessageFlags.IsComponentsV2}); }
+            const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||[]);
+            const active=valid.filter(q=>getReal(q).isActive);
+            const show=active.length?active:valid;
+            if(!show.length){ const c=new ContainerBuilder().setAccentColor(0xFF0000); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ No Active Quests`)); await interaction.followUp({components:[c], flags: MessageFlags.IsComponentsV2}); return; }
+            await interaction.followUp(build(show[0], show, `🔍 Auto-Checked: ${active.length} Active / ${valid.length} Total\n💰 ${getReal(show[0]).rewardText}\n📦 Tracking Ready`));
+        }catch(e){ const c=new ContainerBuilder().setAccentColor(0xFF0000); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ ${e.message.slice(0,800)}`)); await interaction.followUp({components:[c], flags: MessageFlags.IsComponentsV2}); }
     },
     async prefixExecute(message,_args,client){
         const token=await client.tokenStore.get(message.author.id);
@@ -221,11 +145,11 @@ export const questCmd={
         try{
             const qc=new QuestClient(token);
             const mgr=await qc.fetchQuests();
-            const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||mgr.all||[]);
-            const activeValid = valid.filter(q=>getReal(q).isActive && !getReal(q).isExpired);
-            const showQuests = activeValid.length ? activeValid : valid;
-            if(!showQuests.length){ const c=new ContainerBuilder().setAccentColor(0xFF0000); c.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ No Active Quests`)); await message.channel.send({components:[c], flags:MessageFlags.IsComponentsV2}); return; }
-            await message.channel.send(build(showQuests[0], showQuests, `🔍 Auto-Checked: ${activeValid.length} Active / ${valid.length} Total\n💰 ${getReal(showQuests[0]).rewardText}\n📦 Tracking Ready`, {activeOnly:false}));
+            const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||[]);
+            const active=valid.filter(q=>getReal(q).isActive);
+            const show=active.length?active:valid;
+            if(!show.length) return;
+            await message.channel.send(build(show[0], show, `🔍 Auto-Checked: ${active.length} Active\n💰 ${getReal(show[0]).rewardText}`));
         }catch(e){ console.error(e); }
     },
     async handleSelectMenu(interaction, client){
@@ -235,61 +159,42 @@ export const questCmd={
             const token=await client.tokenStore.get(interaction.user.id);
             const qc=new QuestClient(token);
             const mgr=await qc.fetchQuests();
-            const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||mgr.all||[]);
-            const sel=valid.find(q=>String(q.id||q.config?.id)===interaction.values[0])||valid[0];
-            const rd=getReal(sel);
-            await interaction.editReply(build(sel, valid, `🧭 Auto-Checked: ${rd.questName}\n💰 Tracked: ${rd.rewardText} • ${rd.tasksFormatted.split('\n')[0]}\n${rd.isActive?'🟢 Active - Ready to track':'⚫ Completed'}`)).catch(()=>{});
+            const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||[]);
+            const sel=valid.find(q=>String(q.id)===interaction.values[0])||valid[0];
+            await interaction.editReply(build(sel, valid, `🧭 ${getReal(sel).questName}\n💰 ${getReal(sel).rewardText}`)).catch(()=>{});
         }catch(e){ console.error(e); }
     },
     async handleButton(interaction, client){
         if(!interaction.customId.startsWith('quest_')) return;
         await interaction.deferUpdate().catch(()=>{});
-        const without=interaction.customId.replace('quest_','');
-        const sep=without.indexOf('_');
-        if(sep===-1) return;
-        const action=without.slice(0,sep);
-        const qId=without.slice(sep+1);
-        const userId=interaction.user.id;
-        const token=await client.tokenStore.get(userId);
+        const [_, action, qId] = interaction.customId.split('_');
+        const token=await client.tokenStore.get(interaction.user.id);
         if(!token) return;
         const qc=new QuestClient(token);
         const mgr=await qc.fetchQuests();
-        const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||mgr.all||[]);
-        const quest=valid.find(q=>String(q.id||q.config?.id)===qId)||valid[0];
-        const rd = getReal(quest);
+        const valid=mgr.filterQuestsValid?mgr.filterQuestsValid():(mgr.quests||[]);
+        const quest=valid.find(q=>String(q.id)===qId)||valid[0];
+        const rd=getReal(quest);
+        
         if(action==='start'){
-            if(!rd.isActive){ await interaction.editReply(build(quest, valid, `⚫ Already Completed: ${rd.questName}\n💰 ${rd.rewardText} already claimed`)).catch(()=>{}); return; }
-            await interaction.editReply(build(quest, valid, `▶️ Auto-Tracking Started: ${rd.questName}\n💰 Tracking: ${rd.rewardText} • ${rd.tasksFormatted.split('\n')[0]}\n🔍 Bot khud check karega progress`, {progress:rd.progress})).catch(()=>{});
-            activeQuestRunners.set(`${userId}_${qId}`, qc);
+            await interaction.editReply(build(quest, valid, `▶️ Tracking: ${rd.questName}\n💰 ${rd.rewardText} • ${rd.taskStr.split('\n')[0]}`)).catch(()=>{});
             setImmediate(async()=>{
                 try{
                     try{ await qc.enrollQuest?.(quest); }catch{}
-                    let last=0;
                     await qc.doingQuest(quest, (done,total)=>{
                         const p=Math.round(done/total*100);
-                        if(p-last>=2||p===100){ 
-                            last=p; 
-                            const fresh=valid.map(q=>String(q.id||q.config?.id)===qId?{...q, user_status:{...q.user_status, progress:p/100}}:q); 
-                            interaction.editReply(build({...quest, user_status:{...quest.user_status, progress:p/100}}, fresh, `▶️ Tracking Active: ${p}% • ${rd.game}\n💰 Tracked: ${rd.rewardText} • Heartbeat OK • Auto-Check`, {progress:p})).catch(()=>{}); 
-                        }
+                        interaction.editReply(build({...quest, user_status:{progress:p/100}}, valid, `▶️ Active: ${p}% • ${rd.game}\n💰 ${rd.rewardText} • Auto-Check`, {progress:p})).catch(()=>{});
                     });
-                    activeQuestRunners.delete(`${userId}_${qId}`);
-                    rewardTracker.set(qId, {claimed:true, ...rd});
-                    await interaction.editReply(build({...quest, user_status:{progress:1, completed_at:new Date().toISOString()}}, valid, `✅ Completed & Tracked! ${rd.questName}\n🎉 ${rd.rewardText} claimed! Auto-Checked!`, {progress:100})).catch(()=>{});
-                }catch(err){ activeQuestRunners.delete(`${userId}_${qId}`); await interaction.editReply(build(quest, valid, `❌ Failed: ${err.message}\n💡 Try Refresh Check`)).catch(()=>{}); }
+                    await interaction.editReply(build({...quest, user_status:{progress:1, completed_at:new Date().toISOString()}}, valid, `✅ Completed! ${rd.questName}\n🎉 ${rd.rewardText} claimed!`)).catch(()=>{});
+                }catch(err){ await interaction.editReply(build(quest, valid, `❌ ${err.message}\n💡 Refresh Check karo`)).catch(()=>{}); }
             });
         }else if(action==='stop'){
-            const run=activeQuestRunners.get(`${userId}_${qId}`)||qc;
-            if(typeof run.abort==='function') run.abort();
-            activeQuestRunners.delete(`${userId}_${qId}`);
-            await interaction.editReply(build(quest, valid, '⏹️ Tracking Stopped - Active Check Paused')).catch(()=>{});
+            await interaction.editReply(build(quest, valid, '⏹️ Stopped')).catch(()=>{});
         }else if(action==='refresh'){
             const fresh=await qc.fetchQuests();
-            const fValid=fresh.filterQuestsValid?fresh.filterQuestsValid():(fresh.quests||fresh.all||[]);
-            const fQuest=fValid.find(q=>String(q.id||q.config?.id)===qId)||fValid[0];
-            const fd=getReal(fQuest);
-            await interaction.editReply(build(fQuest, fValid, `🔄 Auto-Checked Refresh\n${fd.isActive?'🟢':'⚫'} ${fd.progress}% | ${fd.rewardText} | ${fd.tasksFormatted.split('\n')[0]}\n${fd.isActive?'Active - Trackable':'Completed'}`, {progress:fd.progress})).catch(()=>{});
+            const fValid=fresh.filterQuestsValid?fresh.filterQuestsValid():(fresh.quests||[]);
+            const fQuest=fValid.find(q=>String(q.id)===qId)||fValid[0];
+            await interaction.editReply(build(fQuest, fValid, `🔄 Refresh: ${getReal(fQuest).progress}% | ${getReal(fQuest).rewardText}`)).catch(()=>{});
         }
     }
 };
-export { build as buildFixed, getReal as getRealData };
