@@ -15,12 +15,14 @@ import { QuestClient } from '../quest/questClient.js';
 
 const activeQuestRunners = new Map();
 
+// Real API date formatter (No hardcoded fallback dates)
 function fmtDate(s) {
+    if (!s) return 'N/A';
     try { 
         const d = new Date(s); 
-        return isNaN(d.getTime()) ? '10/20/2026' : d.toLocaleDateString('en-US'); 
+        return isNaN(d.getTime()) ? String(s) : d.toLocaleDateString('en-US'); 
     } catch { 
-        return '10/20/2026'; 
+        return String(s); 
     }
 }
 
@@ -42,6 +44,7 @@ function getReal(q) {
     const app = cfg.application || q.application || {};
     const us = q.user_status || q.userStatus || {};
     
+    // Dynamic game & quest name parsing
     let game = cfg.messages?.gameTitle || cfg.messages?.game_title || app.name || 'Discord Quest';
     let questName = cfg.messages?.questName || cfg.messages?.quest_name || cfg.messages?.name || game;
     
@@ -56,37 +59,47 @@ function getReal(q) {
     
     const qId = q.id || cfg.id || '';
     
-    // Robust Banner & Asset Finder
+    // Dynamic Banner Finder with App CDN & steam fallbacks
     let banner = cfg.assets?.hero || cfg.assets?.heroVideo || cfg.assets?.gameTile || null;
     if (!banner && cfg.assets?.icon) banner = cfg.assets.icon;
+    
     if (banner && !banner.startsWith('http')) {
-        const appId = cfg.application?.id || app.id || '123456789';
-        banner = `https://cdn.discordapp.com/app-icons/${appId}/${banner}.png?size=512`;
+        const appId = cfg.application?.id || app.id;
+        if (appId) {
+            banner = `https://cdn.discordapp.com/app-icons/${appId}/${banner}.png?size=512`;
+        } else {
+            banner = `https://cdn.discordapp.com/quests/${qId}/${banner}.png`;
+        }
     }
     if (!banner) {
         const icon = app.icon || cfg.application?.icon || null;
-        if (icon) {
-            const appId = cfg.application?.id || app.id || '123456789';
+        const appId = cfg.application?.id || app.id;
+        if (icon && appId) {
             banner = `https://cdn.discordapp.com/app-icons/${appId}/${icon}.png?size=512`;
         }
     }
+    
     if (!banner && game.toLowerCase().includes('risk of rain')) {
         banner = 'https://cdn.cloudflare.steamstatic.com/steam/apps/632360/header.jpg';
     }
+    if (!banner && game.toLowerCase().includes('march of giants')) {
+        banner = 'https://cdn.cloudflare.steamstatic.com/steam/apps/1999170/header.jpg';
+    }
 
-    // Dynamic Rewards Parsing
+    // Dynamic Reward Parser (Real Orbs, Items, Avatar Decorations)
     let rewardName = '700 Orbs 💠';
     const rewards = cfg.rewards || cfg.reward_store_listing || [];
     if (rewards.length > 0) {
         const rw = rewards[0];
-        if (rw.name) rewardName = rw.name;
+        if (rw.messages?.name) rewardName = rw.messages.name;
+        else if (rw.name) rewardName = rw.name;
         else if (rw.sku?.name) rewardName = rw.sku.name;
         else if (rw.count) rewardName = `${rw.count} Orbs 💠`;
     } else if (cfg.reward_store_listing?.name) {
         rewardName = cfg.reward_store_listing.name;
     }
 
-    // Dynamic Tasks Parsing (Desktop / Stream / Consoles)
+    // Dynamic Task Config Parser (Supports 10s, 30s, 3m, 15m or Streaming)
     const taskCfg = cfg.task_config || cfg.taskConfig || {};
     const tasksMap = taskCfg.tasks || {};
     const tasksList = Object.values(tasksMap);
@@ -98,22 +111,34 @@ function getReal(q) {
             const targetSeconds = t.target || 900;
             const targetMins = Math.round(targetSeconds / 60);
             const actionType = t.type === 6 ? 'Stream on Discord' : `Play On ${platformType}`;
-            return `• ${actionType} for${targetMins > 0 ? targetMins + 'm' : targetSeconds + 's'}`;
-         hlavní => tasksList.map(t => `• Task target: ${t.target || 900}s`).join('\n'));
-        tasksFormatted = tasksList.map(t => {
-            const target = t.target || 900;
-            const minutes = Math.round(target / 60);
-            return `• Play On Desktop for ${minutes > 0 ? minutes + 'm' : target + 's'}`;
+            
+            if (targetMins >= 1) {
+                return `• ${actionType} for${targetMins}m`;
+            } else {
+                return `• ${actionType} for${targetSeconds}s`;
+            }
         }).join('\n');
     }
 
+    // Real API Dates & User Progress
     let enrolled = us.enrolled_at || us.enrolledAt || new Date().toISOString();
-    let expires = cfg.expires_at || cfg.expiresAt || '10/20/2026';
+    let expires = cfg.expires_at || cfg.expiresAt || null;
     let progress = 0;
     if (us.progress) progress = Math.round(us.progress * 100);
     if (us.completed_at || us.completedAt) progress = 100;
     
-    return { game, publisher, questName, banner, rewardName, tasksFormatted, enrolled, expires, progress, questId: String(qId) };
+    return { 
+        game, 
+        publisher, 
+        questName, 
+        banner, 
+        rewardName, 
+        tasksFormatted, 
+        enrolled, 
+        expires, 
+        progress, 
+        questId: String(qId) 
+    };
 }
 
 function build(quest, allQuests, logStatus, opts = {}) {
@@ -122,6 +147,7 @@ function build(quest, allQuests, logStatus, opts = {}) {
     const isCompleted = progress >= 100;
     
     const main = new ContainerBuilder().setAccentColor(0x5865F2);
+    
     main.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `## 🛡️ Quest Solver\n\n` +
         `• **Game:** ${d.game}\n` +
@@ -140,21 +166,23 @@ function build(quest, allQuests, logStatus, opts = {}) {
     
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large));
     
+    // Only attach MediaGallery if valid banner image URL exists
     const bUrl = opts.bannerUrl || d.banner;
-    if (bUrl && typeof bUrl === 'string' && bUrl.startsWith('http') && bUrl.length > 10) {
+    if (bUrl && typeof bUrl === 'string' && bUrl.startsWith('http') && bUrl.length > 15) {
         try { 
             main.addMediaGalleryComponents(new MediaGalleryBuilder().addItems(new MediaGalleryItemBuilder().setURL(bUrl))); 
             main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Large)); 
         } catch {}
     }
     
+    // Dynamic Select Menu Options
     const placeholder = `${d.game}:${d.questName}`.slice(0, 100);
     const selectOptions = (Array.isArray(allQuests) ? allQuests : [quest]).slice(0, 25).map(q => {
         const rd = getReal(q);
         const isSel = rd.questId === d.questId;
         return { 
             label: `${rd.game}:${rd.questName}`.slice(0, 100), 
-            value: rd.questId, 
+            value: rd.questId || 'default_val', 
             description: `${rd.rewardName} | ${rd.progress}\%${isSel ? ' • Selected' : ''}`.slice(0, 100), 
             emoji: isSel ? { name: '✅' } : { name: '🎮' }, 
             default: isSel 
