@@ -17,16 +17,48 @@ function fmtDate(d){
     if(!d) return '-';
     try{ const date=new Date(d); if(isNaN(date)) return '-'; return `${(date.getMonth()+1).toString().padStart(2,'0')}/${date.getDate().toString().padStart(2,'0')}/${date.getFullYear()}`; }catch{ return '-'; }
 }
-function resolveBanner(cfg, isVideo=false){
+function resolveBanner(cfg){
     const app=cfg.application||{};
     const assets=cfg.assets||{};
     const appId=app.id||'';
     if(!appId) return null;
-    // Exact Orbie logic: hero.png first
     if(assets.hero) return `https://cdn.discordapp.com/app-assets/${appId}/store/${assets.hero}.png`;
     if(assets.game_tile) return `https://cdn.discordapp.com/app-assets/${appId}/quest-assets/${assets.game_tile}.png`;
     if(assets.quest_tile) return `https://cdn.discordapp.com/app-assets/${appId}/quest-assets/${assets.quest_tile}.png`;
     return null;
+}
+function parseTasks(taskObj, userStatus){
+    const tasks = taskObj || {};
+    let list=[];
+    for(const [key, val] of Object.entries(tasks)){
+        const target = val.target || 0;
+        const progress = userStatus?.progress || 0;
+        const pct = Math.round(progress*100);
+        let label, taskText, icon;
+        const k = key.toUpperCase();
+        if(k.includes('PLAY_ON_DESKTOP')){
+            label='Desktop'; icon='⬜'; taskText=`Play On Desktop for ${Math.ceil(target/60)}m`;
+        } else if(k.includes('PLAY_ON_XBOX')){
+            label='Xbox'; icon='🟩'; taskText=`Play On Xbox ${target} times`;
+        } else if(k.includes('PLAY_ON_PLAYSTATION')){
+            label='PlayStation'; icon='🟦'; taskText=`Play On Playstation ${target} times`;
+        } else if(k.includes('WATCH') && k.includes('MOBILE')){
+            label='Mobile'; icon='📱'; taskText=`Watch Video On Mobile for ${target<60?`${target}s`:`${Math.ceil(target/60)}m`}`;
+            if(target===0) taskText=`Watch Video On Mobile for 0m`;
+        } else if(k.includes('WATCH') && (k.includes('DESKTOP') || k.includes('WEB'))){
+            label='Web/Desktop'; icon='🎬'; taskText=`Watch Video for ${target<60?`${target}s`:`${Math.ceil(target/60)}m`}`;
+            if(target===0) taskText=`Watch Video for 0m`;
+        } else if(k.includes('WATCH')){
+            label='Web/Desktop'; icon='🎬'; taskText=`Watch Video for ${target<60?`${target}s`:`${Math.ceil(target/60)}m`}`;
+            if(target===0) taskText=`Watch Video for 0m`;
+        } else if(k.includes('STREAM')){
+            label='Desktop'; icon='⬜'; taskText=`Stream On Desktop for ${Math.ceil(target/60)}m`;
+        } else {
+            label='Desktop'; icon='⬜'; taskText=`${key} for ${target}`;
+        }
+        list.push({key, label, icon, taskText, pct, target});
+    }
+    return list;
 }
 function getData(q){
     const cfg=q.config||q;
@@ -34,53 +66,83 @@ function getData(q){
     const app=cfg.application||{};
     const us=q.user_status||{};
     const rewards=cfg.rewards_config?.rewards||[];
-    const tasks=cfg.task_config??cfg.task_config_v2??{};
-    const t=tasks.tasks||{};
+    const taskCfg=cfg.task_config??cfg.task_config_v2??{};
+    const tasks=taskCfg.tasks||{};
+    
     const game=msgs.game_title||app.name||'Discord Quest';
     const questName=msgs.quest_name||cfg.title||game;
     const publisher=msgs.game_publisher||'Unknown';
-    let rewardLines=rewards.length?rewards.map(r=>r.messages?.name||r.name||`${r.orb_quantity} Orbs`):['700 Orbs'];
+    const banner=resolveBanner(cfg);
+    
+    let rewardLines=rewards.length?rewards.map(r=>r.messages?.name||r.name||`${r.orb_quantity||0} Orbs`):['200 Orbs'];
     rewardLines=[...new Set(rewardLines)].filter(Boolean);
-    let taskList=[], progressList=[];
-    Object.entries(t).forEach(([k,v])=>{
-        const target=v.target||900;
-        if(k==='PLAY_ON_DESKTOP'){ taskList.push(`Play On Desktop for ${Math.ceil(target/60)}m`); progressList.push({label:'Desktop'}); }
-        else if(k==='PLAY_ON_XBOX'){ taskList.push(`Play On Xbox ${target} times`); progressList.push({label:'Xbox'}); }
-        else if(k==='PLAY_ON_PLAYSTATION'){ taskList.push(`Play On Playstation ${target} times`); progressList.push({label:'PlayStation'}); }
-        else if(k.includes('WATCH')){ taskList.push(`Watch Video for ${target<60?`${target}s`:`${Math.ceil(target/60)}m`}`); progressList.push({label:'Desktop'}); }
-        else { taskList.push(`${k} ${target}`); progressList.push({label:'Desktop'}); }
-    });
-    if(taskList.length===0){ taskList=['Play On Desktop for 15m']; progressList=[{label:'Desktop'}]; }
-    if(taskList.length===1){ taskList.push('Play On Xbox 900 times'); progressList.push({label:'Xbox'}); taskList.push('Play On Playstation 900 times'); progressList.push({label:'PlayStation'}); }
-    // Deduplicate like Melon fix
-    taskList=[...new Set(taskList)];
-    // Rebuild progressList after dedup
-    if(taskList.length===1) progressList=[{label:'Desktop'}];
-    else if(taskList.length===3) progressList=[{label:'Desktop'},{label:'Xbox'},{label:'PlayStation'}];
+    
+    const parsed = parseTasks(tasks, us);
+    // Deduplicate by taskText
+    const seen=new Set();
+    const unique=[];
+    for(const p of parsed){
+        if(!seen.has(p.taskText)){
+            seen.add(p.taskText);
+            unique.push(p);
+        }
+    }
+    let finalParsed=unique;
+    if(finalParsed.length===0){
+        finalParsed=[{label:'Desktop', icon:'⬜', taskText:'Play On Desktop for 15m', pct:0}];
+    }
     
     let overall=typeof us.progress==='number'?Math.round(us.progress*100):0;
     if(us.completed_at) overall=100;
-    const isVideo = Object.keys(t).some(k=>k.includes('WATCH'));
-    const banner=resolveBanner(cfg, isVideo);
+    
     return {
-        game, publisher, questName, banner, rewardLines, taskList, progressList,
-        overall, enrolled:us.enrolled_at?fmtDate(us.enrolled_at):'-',
-        expires:cfg.expires_at?fmtDate(cfg.expires_at):'-',
-        questId:String(q.id||''), completed:!!us.completed_at, isEnrolled:!!us.enrolled_at
+        game, publisher, questName, banner, rewardLines,
+        taskList: finalParsed.map(p=>p.taskText),
+        progressList: finalParsed,
+        overall,
+        enrolled: us.enrolled_at?fmtDate(us.enrolled_at):'-',
+        expires: cfg.expires_at?fmtDate(cfg.expires_at):'-',
+        questId:String(q.id||''),
+        completed:!!us.completed_at,
+        isEnrolled:!!us.enrolled_at
     };
 }
 function build(d, all, logText){
     const main=new ContainerBuilder().setAccentColor(d.completed?0x57F287:0x2B2D31);
     let prog='';
     if(d.completed){
-        prog=`✅ 100%\n⬜ Desktop: 100%\n🟩 Xbox: 100%\n🟦 PlayStation: 100%`;
-        if(d.progressList.length===1) prog=`✅ 100%\n⬜ Desktop: 100%`;
+        if(d.progressList.some(p=>p.label==='Mobile')){
+            prog=`✅ 100%\n🎬 Web/Desktop: 100%\n📱 Mobile: 100%`;
+        } else if(d.progressList.length===1){
+            prog=`✅ 100%\n⬜ Desktop: 100%`;
+        } else {
+            prog=`✅ 100%\n`+d.progressList.map(p=>{
+                if(p.label==='Desktop') return `⬜ Desktop: 100%`;
+                if(p.label==='Xbox') return `🟩 Xbox: 100%`;
+                if(p.label==='PlayStation') return `🟦 PlayStation: 100%`;
+                if(p.label==='Web/Desktop') return `🎬 Web/Desktop: 100%`;
+                if(p.label==='Mobile') return `📱 Mobile: 100%`;
+                return `${p.icon} ${p.label}: 100%`;
+            }).join('\n');
+        }
     } else {
         const pct=d.overall||0;
-        if(pct===0) prog=`🔄 ${pct}%\n⬜ Desktop: ${pct}%`;
-        else prog=`🔄 ${pct}%\n⬜ Desktop: ${pct}%\n🟩 Xbox: ${pct}%\n🟦 PlayStation: ${pct}%`;
-        if(d.progressList.length===1) prog=`🔄 ${pct}%\n⬜ Desktop: ${pct}%`;
-        if(!d.isEnrolled) prog=`🔄 0%\n⬜ Desktop: 0%`;
+        const icon = pct===0?'🔄':`🔄`;
+        if(d.progressList.some(p=>p.label==='Mobile')){
+            prog=`${icon} ${pct}%\n🎬 Web/Desktop: ${pct}%\n📱 Mobile: ${pct}%`;
+        } else if(d.progressList.length===1){
+            prog=`${icon} ${pct}%\n⬜ Desktop: ${pct}%`;
+        } else {
+            prog=`${icon} ${pct}%\n`+d.progressList.map(p=>{
+                if(p.label==='Desktop') return `⬜ Desktop: ${pct}%`;
+                if(p.label==='Xbox') return `🟩 Xbox: ${pct}%`;
+                if(p.label==='PlayStation') return `🟦 PlayStation: ${pct}%`;
+                if(p.label==='Web/Desktop') return `🎬 Web/Desktop: ${pct}%`;
+                if(p.label==='Mobile') return `📱 Mobile: ${pct}%`;
+                return `${p.icon} ${p.label}: ${pct}%`;
+            }).join('\n');
+        }
+        if(!d.isEnrolled) prog=`🔄 0%\n`+(d.progressList.some(p=>p.label==='Mobile')?`🎬 Web/Desktop: 0%\n📱 Mobile: 0%`:`⬜ Desktop: 0%`);
     }
     main.addTextDisplayComponents(new TextDisplayBuilder().setContent(
         `## 🌀 Quest Solver\n\n• **Game:** ${d.game}\n• **Publisher:** ${d.publisher}\n• **Quest Name:** ${d.questName}\n• **Enrolled At:** ${d.enrolled}\n• **Expires At:** ${d.expires}\n• **Progress:**\n${prog}\n\n### Rewards:\n`+d.rewardLines.map(r=>`• ${r}`).join('\n')+`\n\n### Tasks:\n`+d.taskList.map(t=>`• ${t}`).join('\n')
@@ -91,16 +153,15 @@ function build(d, all, logText){
     }
     const opts=(all||[]).slice(0,25).map(q=>{
         const rd=getData(q);
-        const tVal=Object.values(q.config?.task_config?.tasks||{})[0]?.target||900;
-        const dStr=tVal<60?`${tVal}s`:`${Math.ceil(tVal/60)}m`;
+        const tVal=Object.values(q.config?.task_config?.tasks||{})[0]?.target||0;
+        const dStr=tVal===0?'0m':(tVal<60?`${tVal}s`:`${Math.ceil(tVal/60)}m`);
         return {label:`${rd.game}: ${rd.questName}`.slice(0,100), value:rd.questId, description:`${rd.rewardLines[0].slice(0,20)} | ${dStr} | ${rd.overall}%`.slice(0,100), default:rd.questId===d.questId};
     });
     main.addActionRowComponents(r=>r.addComponents(new StringSelectMenuBuilder().setCustomId('quest_select_menu').setPlaceholder(`${d.game}: ${d.questName}`.slice(0,100)).addOptions(opts)));
     main.addSeparatorComponents(new SeparatorBuilder().setDivider(true).setSpacing(SeparatorSpacingSize.Small));
-    // Buttons exactly like screenshot - Start Stop Refresh View Quest
     main.addActionRowComponents(r=>r.addComponents(
-        new ButtonBuilder().setCustomId(`quest_start_${d.questId}`).setLabel('Start').setStyle(ButtonStyle.Secondary).setDisabled(d.completed||!d.isEnrolled).setEmoji({name:'▶️'}),
-        new ButtonBuilder().setCustomId(`quest_stop_${d.questId}`).setLabel('Stop').setStyle(ButtonStyle.Secondary).setDisabled(!d.completed&&d.overall===0),
+        new ButtonBuilder().setCustomId(`quest_start_${d.questId}`).setLabel('Start').setStyle(ButtonStyle.Secondary).setDisabled(d.completed).setEmoji({name:'▶️'}),
+        new ButtonBuilder().setCustomId(`quest_stop_${d.questId}`).setLabel('Stop').setStyle(ButtonStyle.Secondary),
         new ButtonBuilder().setCustomId(`quest_refresh_${d.questId}`).setLabel('Refresh').setStyle(ButtonStyle.Secondary).setEmoji({name:'🔄'})
     ));
     main.addActionRowComponents(r=>r.addComponents(new ButtonBuilder().setLabel('View Quest').setURL('https://discord.com/quests').setStyle(ButtonStyle.Link)));
@@ -115,10 +176,10 @@ function buildEphemeral(text, type='info'){
     return {components:[c], flags:MessageFlags.IsComponentsV2|MessageFlags.Ephemeral};
 }
 export const questCmd={
-    data:new SlashCommandBuilder().setName('quest').setDescription('Quest Solver Exact'),
+    data:new SlashCommandBuilder().setName('quest').setDescription('Quest Solver Dynamic'),
     prefix:'quest',
     async execute(i,c){ await i.deferReply(); const t=await c.tokenStore.get(i.user.id); if(!t){ await i.followUp(buildLink()); return; } try{ const qc=new (await import('../quest/questClient.js')).QuestClient(t); const m=await qc.fetchQuests(); const v=m.filterQuestsValid?m.filterQuestsValid():m.quests||[]; if(!v.length){ const cc=new ContainerBuilder().setAccentColor(0x4F545C); cc.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### 🔍 No Quests`)); await i.followUp({components:[cc], flags:MessageFlags.IsComponentsV2}); return; } await i.followUp(build(getData(v[0]), v, `🧭 Quest selected`)); }catch(e){ const cc=new ContainerBuilder().setAccentColor(0xED4245); cc.addTextDisplayComponents(new TextDisplayBuilder().setContent(`### ❌ ${e.message.slice(0,500)}`)); await i.followUp({components:[cc], flags:MessageFlags.IsComponentsV2}); } },
-    async prefixExecute(m,a,c){ const t=await c.tokenStore.get(m.author.id); if(!t){ await m.channel.send(buildLink()); return; } try{ const qc=new (await import('../quest/questClient.js')).QuestClient(t); const mm=await qc.fetchQuests(); const v=mm.filterQuestsValid?mm.filterQuestsValid():mm.quests||[]; if(!v.length) return; await m.channel.send(build(getData(v[0]), v, '🧭 Quest selected')); }catch(e){} },
+    async prefixExecute(m,a,c){ const t=await c.tokenStore.get(m.author.id); if(!t){ await m.channel.send(buildLink()); return; } try{ const qc=new (await import('../quest/questClient.js')).QuestClient(t); const mm=await qc.fetchQuests(); const v=mm.filterQuestsValid?mm.filterQuestsValid():mm.quests||[]; if(!v.length) return; await m.channel.send(build(getData(v[0]), v, '🧭 Quest selected')); }catch{} },
     async handleSelectMenu(i,c){
         if(i.customId!=='quest_select_menu') return;
         await i.deferUpdate().catch(()=>{});
