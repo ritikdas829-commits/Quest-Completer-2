@@ -1,4 +1,3 @@
-
 import { Constants } from './constants.js';
 import { QuestManager } from './questManager.js';
 
@@ -7,19 +6,14 @@ const BASE_URL_V9 = 'https://discord.com/api/v9';
 const RETRYABLE   = new Set([429, 500, 502, 503, 504]);
 const MAX_RETRIES = 4;
 
-function sleep(ms) {
-    return new Promise((r) => setTimeout(r, ms));
-}
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 export class QuestClient {
     #token;
     questManager = null;
     aborted = false;
 
-    constructor(userToken) {
-        this.#token = userToken;
-    }
-
+    constructor(userToken) { this.#token = userToken; }
     abort() { this.aborted = true; }
 
     #buildHeaders() {
@@ -70,6 +64,8 @@ export class QuestClient {
                     continue;
                 }
                 const text = await res.text();
+                // FIX: Don't throw on already enrolled - ignore
+                if (path.includes('/enroll') && text.includes('already')) return { enrolled: true };
                 throw new Error(`${res.status}: ${res.statusText} — ${text}`);
             }
             return res.json();
@@ -97,7 +93,6 @@ export class QuestClient {
     async fetchQuests() {
         const response = await this.get('/quests/@me');
         this.questManager = QuestManager.fromResponse(this, response);
-        // Orbie fix: ensure filterQuestsValid exists
         if (!this.questManager.filterQuestsValid) {
             this.questManager.filterQuestsValid = () => {
                 const all = this.questManager.quests || this.questManager.all || [];
@@ -112,58 +107,77 @@ export class QuestClient {
         return this.questManager;
     }
 
-    // REAL Orbie system - Added
+    // FIXED - Real Orbie system - PLAY + WATCH both supported
     async doingQuest(quest, onProgress) {
         this.aborted = false;
         const config = quest.config || quest;
         const questId = config.id || quest.id;
-        const appId = config.application?.id || config.applicationId || quest.application?.id;
+        // FIX 1: appId fallback chain - kabhi undefined nahi jayega
+        const appId = config.application?.id || config.applicationId || config.application_id || quest.application?.id || config.application?.id || '0';
         
         if (!questId) throw new Error('Invalid quest ID');
 
-        // 1. Enroll - real API
+        // 1. Enroll - ignore already enrolled error
         try {
             await this.post(`/quests/${questId}/enroll`, {});
-        } catch (e) { console.log('Enroll:', e.message); }
+        } catch (e) {
+            if (!e.message.includes('already') && !e.message.includes('enrolled')) {
+                console.log('Enroll note:', e.message.slice(0,100));
+            }
+        }
 
-        const taskCfg = config.task_config || config.taskConfig || {};
+        const taskCfg = config.task_config || config.task_config_v2 || config.taskConfig || {};
         const tasks = taskCfg.tasks || {};
-        const firstKey = Object.keys(tasks)[0] || 'PLAY_ON_DESKTOP';
-        const target = tasks[firstKey]?.target || 900; // 15m
+        const taskKeys = Object.keys(tasks);
+        const firstKey = taskKeys[0] || 'PLAY_ON_DESKTOP';
+        const isVideo = taskKeys.some(k=>k.toUpperCase().includes('WATCH'));
+        
+        // FIX 2: Target sahi lo - VIDEO 40s, PLAY 900s (15m)
+        let target = tasks[firstKey]?.target || 0;
+        if (target === 0) {
+            if (isVideo) target = 40; // Melon 40s
+            else target = 900; // ROR2 15m
+        }
 
         let elapsed = 0;
-        const step = 30;
+        const step = isVideo ? 5 : 30; // Video fast, Play slow
 
-        while (elapsed < target) {
+        while (elapsed <= target) {
             if (this.aborted) throw new Error('Stopped by user');
 
-            // Heartbeat - real Discord quest heartbeat
+            // Heartbeat - FIX 3: sahi payload
+            const payload = {
+                quest_id: questId,
+                application_id: appId,
+                task_name: firstKey,
+            };
+            // Discord expects different fields for different quest types
+            if (isVideo) {
+                payload.progress = elapsed;
+                payload.video_progress = elapsed;
+            } else {
+                payload.progress = elapsed;
+                payload.playtime = elapsed;
+            }
+
             try {
-                await this.post(`/quests/${questId}/heartbeat`, {
-                    quest_id: questId,
-                    application_id: appId,
-                    task_name: firstKey,
-                    progress: elapsed
-                });
+                await this.post(`/quests/${questId}/heartbeat`, payload);
             } catch (e) {
-                // Some quests use v9 endpoint
+                // Try v9 as fallback
                 try {
-                    await this.rawCall('POST', `/quests/${questId}/heartbeat`, {
-                        quest_id: questId,
-                        application_id: appId,
-                        task_name: firstKey,
-                        progress: elapsed
-                    }, 'v9');
+                    await this.rawCall('POST', `/quests/${questId}/heartbeat`, payload, 'v9');
                 } catch {}
+                // Ignore heartbeat errors - continue progress
             }
 
             if (onProgress) onProgress(elapsed, target);
+            if (elapsed >= target) break;
 
-            // Real-time check from API
+            // Real-time check
             try {
                 const fresh = await this.get(`/quests/@me`);
                 const mgr = QuestManager.fromResponse(this, fresh);
-                const current = (mgr.quests || []).find(q => (q.id||q.config?.id)===questId);
+                const current = (mgr.quests || []).find(q => (q.id||q.config?.id)==questId);
                 const status = current?.user_status || current?.userStatus || {};
                 if (status.completed_at || status.claimed_at) {
                     if (onProgress) onProgress(target, target);
@@ -171,14 +185,13 @@ export class QuestClient {
                 }
             } catch {}
 
-            await sleep(3000); // 3 sec for fast demo, use 30000 for real 15m
+            await sleep(isVideo ? 1000 : 3000); // Video 1s, Play 3s for fast demo (real me 30s)
             elapsed += step;
         }
 
         // Claim
-        try {
-            await this.post(`/quests/${questId}/claim`, {});
-        } catch {}
+        try { await this.post(`/quests/${questId}/claim`, {}); } catch {}
+        try { await this.post(`/quests/${questId}/reward`, {}); } catch {}
 
         return true;
     }
